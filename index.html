@@ -22,7 +22,7 @@
   <button id="btnRedo">Redo</button>
   <span class="dv"></span>
   <button id="btnInt">Interiors</button>
-  <button id="btnRoute" disabled>[Phase 2B] Routing</button>
+  <button id="btnRoute">Routing</button>
   <button id="btnSign" disabled>[Phase 3] Signage</button>
   <button id="btnExp" disabled>[Phase 4] Export Village</button>
   <span class="sp"></span>
@@ -49,8 +49,17 @@
     <label class="ck"><input type="checkbox" data-layer="tent" checked>Tents &amp; Cottages</label>
     <label class="ck"><input type="checkbox" data-layer="solar" checked>Solar &amp; Hazards</label>
     <label class="ck"><input type="checkbox" data-layer="trees" checked>Trees &amp; Yards</label>
+    <label class="ck"><input type="checkbox" data-layer="routes" checked>Emergency Routes</label>
     <label class="ck"><input type="checkbox" data-layer="labels" checked>Labels</label>
     <label class="ck"><input type="checkbox" data-layer="grid" checked>Metric Grid</label>
+    <label>3D Route Overlay
+      <select id="routeView">
+        <option value="both">Fire + Shelling</option>
+        <option value="fire">Fire Only (Green)</option>
+        <option value="shelling">Shelling Only (Cyan)</option>
+        <option value="off">Hidden</option>
+      </select>
+    </label>
     <h3>Local Draft</h3>
     <label class="ck"><input type="checkbox" id="chkAuto">Auto-save draft to this browser</label>
     <div class="row"><button id="btnRestore">Restore Draft</button></div>
@@ -70,6 +79,7 @@
 <script src="js/kmlParser.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/interior.js"></script>
+<script src="js/routing.js"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -111,6 +121,8 @@
     if (f && f.geometryType === 'polygon' && INT_CATS.indexOf(f.category) >= 0) S.Interior.open(f.id);
     else S.Interior.pick();
   };
+  $('btnRoute').onclick = function () { if (S.Routing) S.Routing.open(); };
+  $('routeView').onchange = function () { if (S.Routing) S.Routing.setOverlayMode(this.value); };
   $('btnFit').onclick = function () { E.fitView(); };
   $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
   $('btnR').onclick = function () { $('right').classList.toggle('hide'); };
@@ -192,7 +204,7 @@
   renderInsp(null); renderList();
 
   document.addEventListener('keydown', function (e) {
-    if (S.Interior && S.Interior.isOpen()) return;
+    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
