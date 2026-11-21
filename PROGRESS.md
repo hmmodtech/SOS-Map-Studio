@@ -1,98 +1,52 @@
-Markdown
 # SOS Emergency & Evacuation 3D Master Studio — PROGRESS.md
 
 ## Architecture & Operational Constraints
 - **Deployment Model:** Zero-build, zero-dependency static web app hosted on GitHub Pages (`Plan B OPSEC`: **ZERO** real GPS coordinates, site layouts, village names, or staff data hardcoded in the repository).
 - **Local Data Workflow:** Site KML (`SOS-Village-Clean.kml`) and project state (`.sos.json`) remain strictly local on the operator's device and are imported/exported at runtime.
 - **Namespace:** Global `window.SOS = window.SOS || {};` using classic `<script src="js/..."></script>` tags (no ES modules, no CDNs, no bundlers).
-- **Visual Identity:** Dark Neon Matrix Cyber HUD (`#080b10` bg, `#0e141d` panels, `#1b2838` borders, `#39ff14` cyber green, `#e8c84a` warning amber, `#ff3c3c` danger red, `#00d9ff` info/safe-haven cyan).
+- **Visual Identity:** Dark Neon Matrix Cyber HUD (`#080b10` bg, `#0e141d` panels, `#1b2838` borders, `#39ff14` cyber green, `#e8c84a` warning amber, `#ff3c3c` danger red, `#00d9ff` cyan, `#a06bff` safe-haven purple).
 - **UI Language:** Master Studio is **100% English** (with bilingual `en_name` / `ar_name` data fields for Village Field Edition export).
 
 ---
 
 ## Repository Structure & Status
-- `index.html` — **[DONE — Phase 2A wired]** Main Cyber HUD shell, file pickers, toolbar, Inspector (including `Edit Floor Plan` button), and keyboard shortcut guard (`S.Interior.isOpen()`).
+- `index.html` — **[DONE — Phase 2B wired]** Cyber HUD shell, `Interiors` + `Routing` active, `Emergency Routes` layer & 3D Route Overlay selector, modal keyboard guards.
 - `css/style.css` — **[DONE — Phase 1.1]** Single-row top HUD bar, responsive Cyber HUD layout.
-- `js/state.js` — **[DONE — Phase 1]** Project state, undo/redo snapshots, `.sos.json` load/save, optional localStorage draft, OPSEC wipe.
-- `js/kmlParser.js` — **[DONE — Phase 1.1]** KML 2.2 metric parser (ignores `<visibility>0</visibility>`, reads `ExtendedData`, computes metric area/perimeter & site alignment angle).
-- `js/engine.js` — **[DONE — Phase 1.1]** Canvas 2D 2.5D/3D isometric engine, label collision filter, architectural neutral building colors, procedural sub-units (`auto` / `solid`) for tents & cottages, Base64 icon compressor, metric distance ruler.
-- `js/interior.js` — **[DONE — Phase 2A]** Self-contained 2D architectural cutaway floor plan editor (injects `<style id="sos-interior-css">`), multi-floor tabs, snap-to-grid, templates, stair ghost alignment across floors, PNG export, True North mini-compass.
-- `js/routing.js` — **[NEXT — Phase 2B]** Multi-protocol emergency routing graph (Dijkstra: Fire Evacuation + Shelling/Crossfire Safe Havens + Blocked Path simulation).
-- `js/signage.js` — **[PENDING — Phase 3]** Context-aware A3/A4 Wall Signage generator (`YOU ARE HERE`, heads-up wall orientation, offline QR generator).
-- `js/exporter.js` — **[PENDING — Phase 4]** Standalone `village.html` exporter (<400 KB, Read-Only bilingual AR/EN, `?alert=` & `?loc=` params, offline audio cues, MikroTik Captive Portal ready).
+- `js/state.js` — **[DONE — Phase 1, verified]** Full `.sos.json` persistence for `features`, `interiors`, `routes`, `signagePins`, undo/redo, draft, OPSEC wipe.
+- `js/kmlParser.js` — **[DONE — Phase 1.1]** KML 2.2 metric parser.
+- `js/engine.js` — **[DONE — Phase 2B hook]** Canvas 2D 2.5D/3D isometric engine + `routes` layer + `S.Routing.drawOn3D(ctx, P, sc)` live animated overlay + `project: P` exposed.
+- `js/interior.js` — **[DONE — Phase 2A]** Self-contained 2D architectural cutaway floor plan editor.
+- `js/routing.js` — **[DONE — Phase 2B]** Self-contained 2D Top-Down Emergency Routing Studio (injects `<style id="sos-routing-css">`), Fire & Shelling protocols, Auto-Seed Nodes, Auto-Connect (Prim MST + alternate links), Dijkstra shortest path + evacuation time (`1.2 m/s` & `0.8 m/s`), Blocked Path/Hazard simulator, PNG export, and Live 3D animated overlay.
+- `js/signage.js` — **[NEXT — Phase 3]** Context-aware A3/A4 Wall Signage generator (`YOU ARE HERE` pin, heads-up wall orientation, nearest extinguisher & fire/shelling paths, offline QR code generator).
+- `js/exporter.js` — **[PENDING — Phase 4]** Standalone `village.html` exporter (<400 KB, Read-Only bilingual AR/EN, `?alert=` & `?loc=` params, offline audio cues, MikroTik Captive Portal script).
 
 ---
 
 ## Verified Public API Contracts (`window.SOS`)
 
 ### 1. `window.SOS.State` (`js/state.js`)
-Verified members & methods used by `index.html` and `js/interior.js`:
-- `project`: `{ meta: { areaSqm, perimeterM, ... }, features: [], interiors: {}, ... }`
-- `autoSave` (boolean)
-- `snapshot()`, `undo()`, `redo()`
-- `on(event, fn)`, `emit(event, data)`
-  - Verified events: `'change'`, `'select'`, `'view'`, `'measure'`, `'status'`
-- `saveProjectJSON()`, `loadProjectJSON(file)`
-- `autoSaveDraft()`, `restoreDraft()`, `clearWorkspace()`
+- `project`: `{ meta, features, customAssets, interiors, routes: { fire: { nodes, edges }, shelling: { nodes, edges } }, signagePins }`
+- Methods: `blank()`, `newFeature(o)`, `merge(p)`, `on(e, f)`, `emit(e, d)`, `snapshot()`, `undo()`, `redo()`, `saveProjectJSON()`, `loadProjectJSON(file)`, `autoSaveDraft()`, `restoreDraft()`, `clearWorkspace()`.
 
-### 2. `window.SOS.KMLParser` (`js/kmlParser.js`)
-- `parse(xmlText)` → `{ meta, features, skipped }`
+### 2. `window.SOS.Engine` (`js/engine.js`)
+- Methods: `init(cv)`, `setTool(t)`, `setAddType(t)`, `setYaw(v)`, `setPitch(v)`, `setQuality(h)`, `isHQ()`, `setLayer(k, v)`, `toggleNorthUp()`, `fitView()`, `select(id)`, `getSelected()`, `deleteSelected()`, `sizeOf(f)`, `resizeSelected(w, d)`, `attachIcon(file)`, `clearIcon()`, `getMeasure()`, `fmt(s)`, `renderModeOf(f)`, `project(x, y, z)`, `render()`.
+- Layers: `fence`, `build`, `tent`, `solar`, `trees`, `routes`, `labels`, `grid`.
 
-### 3. `window.SOS.Engine` (`js/engine.js`)
-Verified methods used by `index.html`:
-- `init(canvasEl)`, `fitView()`, `toggleNorthUp()`
-- `isHQ()`, `setQuality(bool)`
-- `setTool(tool)` (`'select' | 'pan' | 'add' | 'measure'`)
-- `setAddType(type)`
-- `setLayer(key, bool)` (`'fence' | 'build' | 'tent' | 'solar' | 'trees' | 'labels' | 'grid'`)
-- `setYaw(deg)`, `setPitch(deg)`, `fmt(seconds)`
-- `getSelected()`, `select(id)`, `deleteSelected()`
-- `renderModeOf(feature)`, `sizeOf(feature)`, `resizeSelected(w, d)`
-- `attachIcon(file)`, `clearIcon()`
-- **Note for Phase 2B:** Do NOT guess internal camera/projection helpers in `js/engine.js`; inspect `js/engine.js` before adding route-overlay rendering or map click hooks.
+### 3. `window.SOS.Interior` (`js/interior.js`)
+- Methods: `open(featureId)`, `close()`, `pick()`, `isOpen()`.
 
-### 4. `window.SOS.Interior` (`js/interior.js`)
-- `open(featureId)` — Opens fullscreen 2D cutaway editor for polygon `building | medical | security` features.
-- `close()` — Closes editor and emits `State.emit('change')`.
-- `pick()` — Opens modal structure picker when no valid building is selected.
-- `isOpen()` — Returns boolean (used by `index.html` to prevent global `Delete`/`Ctrl+Z` from affecting exterior features).
-- **Verified Interior Data Schema** (`window.SOS.State.project.interiors[featureId]`):
+### 4. `window.SOS.Routing` (`js/routing.js`)
+- Methods: `open()`, `close()`, `isOpen()`, `setOverlayMode('both'|'fire'|'shelling'|'off')`, `getOverlayMode()`, `solveDijkstra(protocol, startId, goalFilter)`, `drawOn3D(ctx, P, sc)`, `hasActiveAnim()`.
+- **Verified Routes Schema** (`window.SOS.State.project.routes.fire` / `.shelling`):
   ```json
   {
-    "featureId": "building_3story",
-    "alignAngleRad": 0,
-    "floors": {
-      "1": {
-        "rooms": [{ "id": "r_...", "x": 0, "y": 0, "w": 4, "h": 3, "en_name": "Office 1", "ar_name": "", "color": "#00d9ff" }],
-        "walls": [{ "id": "w_...", "x1": 0, "y1": 0, "x2": 4, "y2": 0 }],
-        "items": [{ "id": "i_...", "type": "safe_haven", "x": 0, "y": 0, "w": 4, "h": 3, "rotationDeg": 0, "en_name": "", "ar_name": "" }]
-      }
-    }
+    "nodes": [{ "id": "n_...", "x": 0, "y": 0, "type": "start|waypoint|assembly|exit|safe_haven", "en_name": "", "ar_name": "", "featureId": null, "blocked": false }],
+    "edges": [{ "id": "e_...", "from": "n_1", "to": "n_2", "blocked": false, "bidirectional": true }]
   }
-Supported item.type values: stairs, main_entrance, emergency_exit, door, window, safe_haven, extinguisher, fire_alarm, smoke_detector, first_aid, desk, chair, meeting_table, cabinet, medical_bed.
-
-5. Verified Top-Bar DOM IDs (index.html)
-Active: #btnL, #btnKml, #btnLoad, #btnSave, #btnClear, #btnNorth, #btnQual, #btnUndo, #btnRedo, #btnInt, #btnR
-
-Placeholders ready for next phases:
-
-#btnRoute (disabled, [Phase 2B] Routing)
-
-#btnSign (disabled, [Phase 3] Signage)
-
-#btnExp (disabled, [Phase 4] Export Village)
-
-Handoff Notes for Phase 2B (js/routing.js)
-Enable #btnRoute (label: Routing) and integrate an exterior emergency routing graph stored in window.SOS.State.project.routes:
-
-fire protocol (cyber green #39ff14): connects rooms/zones/exits to the primary Assembly Point (assembly_point_primary) and Evacuation Bus (evacuation_bus), with support for adding/switching alternate assembly points later.
-
-shelling protocol (cyan/purple #00d9ff / #a06bff): routes personnel to concrete Safe Havens (building_3story / interior safe_haven markers) while avoiding exposed open routes.
-
-Implement shortest-path calculation (Dijkstra) with:
-
-Metric distance (m) and estimated evacuation times (1.2 m/s standard & 0.8 m/s children/evacuation pace).
-
-Interactive Simulate Blocked Node/Edge (Hazard) toggle to verify automatic rerouting.
-
-Verify js/state.js preserves both project.interiors and project.routes across saveProjectJSON(), loadProjectJSON(), snapshot(), and clearWorkspace().
+5. Top-Bar Placeholders Remaining (index.html)
+​#btnSign (disabled, [Phase 3] Signage)
+​#btnExp (disabled, [Phase 4] Export Village)
+​Handoff Notes for Phase 3 (js/signage.js)
+​1. Enable #btnSign (label: Signage) and store wall signage pins in window.SOS.State.project.signagePins.
+​2. Allow placing a YOU ARE HERE pin on either the exterior site map or inside a building floor (interiors), setting the viewer's wall facing angle (Heads-Up Orientation), auto-rotating the diagram so "forward" is up, highlighting the nearest fire extinguisher + Fire (green) & Shelling (cyan) Dijkstra routes via window.SOS.Routing.solveDijkstra.
+​3. Include a zero-dependency pure-JS offline QR generator encoding the zone URL (?loc=pin_id) and export print-ready A3/A4 PNG (300 DPI desktop / 150 DPI mobile).
