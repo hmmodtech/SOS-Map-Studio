@@ -21,10 +21,10 @@
   <button id="btnUndo">Undo</button>
   <button id="btnRedo">Redo</button>
   <span class="dv"></span>
-  <button disabled>[Phase 2] Interiors</button>
-  <button disabled>[Phase 2] Routing</button>
-  <button disabled>[Phase 3] Signage</button>
-  <button disabled>[Phase 4] Export Village</button>
+  <button id="btnInt">Interiors</button>
+  <button id="btnRoute" disabled>[Phase 2B] Routing</button>
+  <button id="btnSign" disabled>[Phase 3] Signage</button>
+  <button id="btnExp" disabled>[Phase 4] Export Village</button>
   <span class="sp"></span>
   <button id="btnR" title="Toggle inspector">Inspector &#9776;</button>
   <input type="file" id="fileKml" accept=".kml,application/vnd.google-earth.kml+xml,text/xml" hidden>
@@ -69,10 +69,12 @@
 <script src="js/state.js"></script>
 <script src="js/kmlParser.js"></script>
 <script src="js/engine.js"></script>
+<script src="js/interior.js"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
   var CATS = ['building', 'cottage', 'tent', 'solar', 'olive_zone', 'hazard', 'medical', 'security', 'gate', 'fence', 'field', 'yard', 'road', 'assembly', 'vehicle', 'tree', 'extinguisher', 'camera', 'custom'];
+  var INT_CATS = ['building', 'medical', 'security'];
   var F = [['en_name', 'EN name', 'text'], ['ar_name', 'AR name', 'text'], ['category', 'Category', 'sel', CATS],
     ['shapeType', 'Shape type', 'sel', ['extrude', 'block', 'prism', 'marker']], ['roofType', 'Roof', 'sel', ['flat', 'red_tile', 'quonset', 'pyramid']],
     ['height_m', 'Height (m)', 'num'], ['floors', 'Floors', 'num'], ['rotationDeg', 'Rotation (deg)', 'num'], ['color', 'Color', 'color'],
@@ -104,6 +106,11 @@
   $('btnQual').onclick = function () { var h = !E.isHQ(); E.setQuality(h); $('btnQual').textContent = 'Quality: ' + (h ? 'High' : 'Low'); };
   $('btnUndo').onclick = function () { St.undo(); };
   $('btnRedo').onclick = function () { St.redo(); };
+  $('btnInt').onclick = function () {
+    var f = E.getSelected();
+    if (f && f.geometryType === 'polygon' && INT_CATS.indexOf(f.category) >= 0) S.Interior.open(f.id);
+    else S.Interior.pick();
+  };
   $('btnFit').onclick = function () { E.fitView(); };
   $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
   $('btnR').onclick = function () { $('right').classList.toggle('hide'); };
@@ -142,6 +149,9 @@
     var el = $('insp');
     if (!f) { el.innerHTML = '<p class="mut">Select a feature on the canvas or from the list.</p>'; return; }
     var h = '';
+    if (f.geometryType === 'polygon' && INT_CATS.indexOf(f.category) >= 0) {
+      h += '<div class="row"><button id="bFloor" class="on">Edit Floor Plan</button></div>';
+    }
     F.forEach(function (d) {
       var k = d[0], v = f[k], t = d[2], i;
       if (t === 'sel') i = '<select data-k="' + k + '">' + d[3].map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select>';
@@ -160,6 +170,7 @@
     h += '<div class="row"><button id="bIcon">Icon...</button><button id="bIconX">Clear icon</button><button id="bDel" class="dng">Delete</button></div>';
     if (f.customIconBase64) h += '<img src="' + f.customIconBase64 + '" alt="icon" style="max-width:64px;max-height:64px;display:block">';
     el.innerHTML = h;
+    if ($('bFloor')) $('bFloor').onclick = function () { S.Interior.open(f.id); };
     [].forEach.call(el.querySelectorAll('[data-k]'), function (i) {
       i.onchange = function () {
         St.snapshot();
@@ -181,6 +192,7 @@
   renderInsp(null); renderList();
 
   document.addEventListener('keydown', function (e) {
+    if (S.Interior && S.Interior.isOpen()) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
