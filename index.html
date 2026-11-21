@@ -17,6 +17,7 @@
   <button id="btnClear" class="dng">Clear Data (OPSEC)</button>
   <span class="dv"></span>
   <button id="btnNorth">North Up</button>
+  <button id="btnTheme">Theme: Cyber</button>
   <button id="btnQual">Quality: High</button>
   <button id="btnUndo">Undo</button>
   <button id="btnRedo">Redo</button>
@@ -83,13 +84,14 @@
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
-  var CATS = ['building', 'cottage', 'tent', 'solar', 'olive_zone', 'hazard', 'medical', 'security', 'gate', 'fence', 'field', 'yard', 'road', 'assembly', 'vehicle', 'tree', 'extinguisher', 'camera', 'custom'];
+  var CATS = ['building', 'cottage', 'tent', 'pool', 'playground', 'parking', 'diesel_tank', 'solar', 'olive_zone', 'hazard', 'medical', 'security', 'gate', 'fence', 'field', 'yard', 'road', 'assembly', 'vehicle', 'tree', 'extinguisher', 'camera', 'custom'];
   var INT_CATS = ['building', 'medical', 'security'];
   var F = [['en_name', 'EN name', 'text'], ['ar_name', 'AR name', 'text'], ['category', 'Category', 'sel', CATS],
     ['shapeType', 'Shape type', 'sel', ['extrude', 'block', 'prism', 'marker']], ['roofType', 'Roof', 'sel', ['flat', 'red_tile', 'quonset', 'pyramid']],
     ['height_m', 'Height (m)', 'num'], ['floors', 'Floors', 'num'], ['rotationDeg', 'Rotation (deg)', 'num'], ['color', 'Color', 'color'],
     ['hazard_flag', 'Hazard flag', 'chk'], ['visible', 'Visible', 'chk'], ['notes', 'Notes', 'text']];
-  var ADD = [['building', 'Building'], ['cottage', 'Cottage'], ['tent', 'Tent'], ['solar', 'Solar Array'], ['tree', 'Tree'], ['vehicle', 'Vehicle'],
+  var ADD = [['building', 'Building'], ['cottage', 'Cottage'], ['tent', 'Tent'], ['pool', 'Covered Pool'], ['playground', 'Playground'],
+    ['parking', 'Parking Lot'], ['diesel_tank', 'Diesel Tank'], ['solar', 'Solar Array'], ['tree', 'Tree'], ['vehicle', 'Vehicle'],
     ['extinguisher', 'Fire Extinguisher'], ['camera', 'Camera'], ['custom', 'Custom Point']];
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function pick(btn, file, fn) { btn.onclick = function () { file.value = ''; file.click(); }; file.onchange = function () { if (file.files[0]) fn(file.files[0]); }; }
@@ -113,6 +115,11 @@
   $('btnSave').onclick = function () { St.saveProjectJSON(); };
   $('btnClear').onclick = function () { if (confirm('Wipe ALL workspace data, undo history and the saved browser draft?')) { St.clearWorkspace(); E.fitView(); } };
   $('btnNorth').onclick = function () { E.toggleNorthUp(); };
+  $('btnTheme').onclick = function () {
+    var t = E.toggleTheme();
+    $('btnTheme').textContent = 'Theme: ' + (t === 'print' ? 'Print' : 'Cyber');
+    $('btnTheme').classList.toggle('on', t === 'print');
+  };
   $('btnQual').onclick = function () { var h = !E.isHQ(); E.setQuality(h); $('btnQual').textContent = 'Quality: ' + (h ? 'High' : 'Low'); };
   $('btnUndo').onclick = function () { St.undo(); };
   $('btnRedo').onclick = function () { St.redo(); };
