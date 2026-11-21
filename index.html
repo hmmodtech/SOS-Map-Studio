@@ -1,1 +1,186 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>SOS Emergency &amp; Evacuation 3D Master Studio</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header id="hud">
+  <h1>SOS 3D MASTER STUDIO</h1>
+  <button id="btnL" title="Toggle toolbar">&#9776; Tools</button>
+  <button id="btnKml">Import KML</button>
+  <button id="btnLoad">Load .sos.json</button>
+  <button id="btnSave">Save .sos.json</button>
+  <button id="btnClear" class="dng">Clear Data (OPSEC)</button>
+  <button id="btnNorth">North Up</button>
+  <button id="btnQual">Quality: High</button>
+  <button id="btnUndo">Undo</button>
+  <button id="btnRedo">Redo</button>
+  <button disabled>[Phase 2] Interiors</button>
+  <button disabled>[Phase 2] Routing</button>
+  <button disabled>[Phase 3] Signage</button>
+  <button disabled>[Phase 4] Export Village</button>
+  <span class="sp"></span>
+  <button id="btnR" title="Toggle inspector">Inspector &#9776;</button>
+  <input type="file" id="fileKml" accept=".kml,application/vnd.google-earth.kml+xml,text/xml" hidden>
+  <input type="file" id="fileSos" accept=".json,.sos.json,application/json" hidden>
+  <input type="file" id="fileIcon" accept="image/png,image/svg+xml,image/jpeg,image/webp" hidden>
+</header>
+<div id="main">
+  <aside id="left">
+    <h3>Tools</h3>
+    <div class="row"><button data-tool="select" class="on">Select</button><button data-tool="pan">Pan</button></div>
+    <div class="row"><button data-tool="add">Add</button><button data-tool="measure">Measure</button></div>
+    <select id="addType" title="Feature to add"></select>
+    <div id="meas" class="mut">Measure: click two points</div>
+    <h3>Camera</h3>
+    <label>Orbit (<span id="yawV">0</span>&deg;)<input type="range" id="yaw" min="0" max="360" step="1" value="0"></label>
+    <label>Tilt (<span id="pitchV">45</span>&deg;)<input type="range" id="pitch" min="0" max="75" step="1" value="45"></label>
+    <div class="row"><button id="btnFit">Fit View</button></div>
+    <p class="mut">Wheel/pinch = zoom. Shift or right-drag = orbit. Two-finger twist = rotate.</p>
+    <h3>Layers</h3>
+    <label class="ck"><input type="checkbox" data-layer="fence" checked>Fence</label>
+    <label class="ck"><input type="checkbox" data-layer="build" checked>Buildings</label>
+    <label class="ck"><input type="checkbox" data-layer="tent" checked>Tents &amp; Cottages</label>
+    <label class="ck"><input type="checkbox" data-layer="solar" checked>Solar &amp; Hazards</label>
+    <label class="ck"><input type="checkbox" data-layer="trees" checked>Trees &amp; Yards</label>
+    <label class="ck"><input type="checkbox" data-layer="labels" checked>Labels</label>
+    <label class="ck"><input type="checkbox" data-layer="grid" checked>Metric Grid</label>
+    <h3>Local Draft</h3>
+    <label class="ck"><input type="checkbox" id="chkAuto">Auto-save draft to this browser</label>
+    <div class="row"><button id="btnRestore">Restore Draft</button></div>
+    <p class="mut">Off by default. Use Clear Data (OPSEC) before leaving a shared device.</p>
+  </aside>
+  <div id="cv"><canvas id="c"></canvas></div>
+  <aside id="right">
+    <h3>Inspector</h3>
+    <div id="insp"></div>
+    <h3>Features</h3>
+    <div id="list"></div>
+  </aside>
+</div>
+<div id="st">Ready. Import a .kml or .sos.json from your device.</div>
+
+<script src="js/state.js"></script>
+<script src="js/kmlParser.js"></script>
+<script src="js/engine.js"></script>
+<script>
+(function () {
+  var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
+  var CATS = ['building', 'cottage', 'tent', 'solar', 'olive_zone', 'hazard', 'medical', 'security', 'gate', 'fence', 'field', 'yard', 'road', 'assembly', 'vehicle', 'tree', 'extinguisher', 'camera', 'custom'];
+  var F = [['en_name', 'EN name', 'text'], ['ar_name', 'AR name', 'text'], ['category', 'Category', 'sel', CATS],
+    ['shapeType', 'Shape type', 'sel', ['extrude', 'block', 'prism', 'marker']], ['roofType', 'Roof', 'sel', ['flat', 'red_tile', 'quonset', 'pyramid']],
+    ['height_m', 'Height (m)', 'num'], ['floors', 'Floors', 'num'], ['rotationDeg', 'Rotation (deg)', 'num'], ['color', 'Color', 'color'],
+    ['hazard_flag', 'Hazard flag', 'chk'], ['visible', 'Visible', 'chk'], ['notes', 'Notes', 'text']];
+  var ADD = [['building', 'Building'], ['cottage', 'Cottage'], ['tent', 'Tent'], ['solar', 'Solar Array'], ['tree', 'Tree'], ['vehicle', 'Vehicle'],
+    ['extinguisher', 'Fire Extinguisher'], ['camera', 'Camera'], ['custom', 'Custom Point']];
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function pick(btn, file, fn) { btn.onclick = function () { file.value = ''; file.click(); }; file.onchange = function () { if (file.files[0]) fn(file.files[0]); }; }
+
+  E.init($('c'));
+  $('addType').innerHTML = ADD.map(function (a) { return '<option value="' + a[0] + '">' + a[1] + '</option>'; }).join('');
+
+  pick($('btnKml'), $('fileKml'), function (f) {
+    var r = new FileReader();
+    r.onload = function () {
+      try {
+        var o = S.KMLParser.parse(r.result);
+        St.snapshot(); Object.assign(St.project.meta, o.meta); St.project.features = o.features;
+        St.emit('select', null); St.emit('change'); E.fitView();
+        if (o.skipped) alert(o.skipped + ' hidden placemark(s) skipped.');
+      } catch (e) { alert('KML import failed: ' + e.message); }
+    };
+    r.readAsText(f);
+  });
+  pick($('btnLoad'), $('fileSos'), function (f) { St.loadProjectJSON(f).then(function () { E.fitView(); }).catch(function (e) { alert('Load failed: ' + e.message); }); });
+  $('btnSave').onclick = function () { St.saveProjectJSON(); };
+  $('btnClear').onclick = function () { if (confirm('Wipe ALL workspace data, undo history and the saved browser draft?')) { St.clearWorkspace(); E.fitView(); } };
+  $('btnNorth').onclick = function () { E.toggleNorthUp(); };
+  $('btnQual').onclick = function () { var h = !E.isHQ(); E.setQuality(h); $('btnQual').textContent = 'Quality: ' + (h ? 'High' : 'Low'); };
+  $('btnUndo').onclick = function () { St.undo(); };
+  $('btnRedo').onclick = function () { St.redo(); };
+  $('btnFit').onclick = function () { E.fitView(); };
+  $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
+  $('btnR').onclick = function () { $('right').classList.toggle('hide'); };
+  if (window.innerWidth < 800) { $('left').classList.add('hide'); $('right').classList.add('hide'); }
+
+  var tools = document.querySelectorAll('[data-tool]');
+  function setTool(t) { E.setTool(t); [].forEach.call(tools, function (x) { x.classList.toggle('on', x.dataset.tool === t); }); }
+  [].forEach.call(tools, function (b) { b.onclick = function () { setTool(b.dataset.tool); }; });
+  $('addType').onchange = function () { E.setAddType(this.value); setTool('add'); };
+  [].forEach.call(document.querySelectorAll('[data-layer]'), function (cb) { cb.onchange = function () { E.setLayer(cb.dataset.layer, cb.checked); }; });
+  $('yaw').oninput = function () { E.setYaw(this.value); };
+  $('pitch').oninput = function () { E.setPitch(this.value); };
+  $('chkAuto').onchange = function () { St.autoSave = this.checked; if (this.checked) St.autoSaveDraft(); };
+  $('btnRestore').onclick = function () { if (St.restoreDraft()) E.fitView(); else alert('No saved draft found in this browser.'); };
+
+  St.on('view', function (v) {
+    $('yaw').value = Math.round(v.yaw); $('yawV').textContent = Math.round(v.yaw); $('pitch').value = Math.round(v.pitch); $('pitchV').textContent = Math.round(v.pitch);
+    $('btnNorth').textContent = v.north ? 'North Up' : 'Site Align';
+  });
+  St.on('measure', function (m) {
+    $('meas').textContent = m ? m.d.toFixed(1) + ' m | ' + E.fmt(m.t12) + ' @1.2 m/s | ' + E.fmt(m.t08) + ' @0.8 m/s' : 'Measure: click two points';
+  });
+  St.on('status', function (d) {
+    var m = d.meta;
+    $('st').textContent = 'X ' + d.x.toFixed(1) + ' m  Y ' + d.y.toFixed(1) + ' m | Area ' + Math.round(m.areaSqm || 0) + ' m2 | Perimeter ' + Math.round(m.perimeterM || 0) + ' m | Zoom ' + d.zoom.toFixed(2) + 'x | Features ' + d.count;
+  });
+
+  function renderList() {
+    var s = E.getSelected(), fs = St.project.features;
+    $('list').innerHTML = fs.length ? fs.map(function (f) {
+      return '<div class="it' + (s && s.id === f.id ? ' sel' : '') + '" data-id="' + esc(f.id) + '"><span>' + esc(f.en_name || f.id) + '</span><small>' + esc(f.category) + '</small></div>';
+    }).join('') : '<div class="it mut">No features loaded</div>';
+    [].forEach.call($('list').querySelectorAll('[data-id]'), function (el) { el.onclick = function () { E.select(el.dataset.id); }; });
+  }
+  function renderInsp(f) {
+    var el = $('insp');
+    if (!f) { el.innerHTML = '<p class="mut">Select a feature on the canvas or from the list.</p>'; return; }
+    var h = '';
+    F.forEach(function (d) {
+      var k = d[0], v = f[k], t = d[2], i;
+      if (t === 'sel') i = '<select data-k="' + k + '">' + d[3].map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select>';
+      else if (t === 'chk') i = '<input type="checkbox" data-k="' + k + '"' + (v ? ' checked' : '') + '>';
+      else i = '<input type="' + (t === 'num' ? 'number' : t === 'color' ? 'color' : 'text') + '" data-k="' + k + '" value="' + esc(v) + '"' + (k === 'ar_name' ? ' dir="rtl"' : '') + (t === 'num' ? ' step="any"' : '') + '>';
+      h += '<label>' + d[1] + i + '</label>';
+    });
+    if (f.geometryType === 'polygon') {
+      var sz = E.sizeOf(f);
+      h += '<label>Width (m)<input type="number" id="iw" step="any" value="' + sz.w.toFixed(1) + '"></label><label>Depth (m)<input type="number" id="idp" step="any" value="' + sz.d.toFixed(1) + '"></label>';
+    }
+    h += '<div class="row"><button id="bIcon">Icon...</button><button id="bIconX">Clear icon</button><button id="bDel" class="dng">Delete</button></div>';
+    if (f.customIconBase64) h += '<img src="' + f.customIconBase64 + '" alt="icon" style="max-width:64px;max-height:64px;display:block">';
+    el.innerHTML = h;
+    [].forEach.call(el.querySelectorAll('[data-k]'), function (i) {
+      i.onchange = function () {
+        St.snapshot();
+        var k = i.dataset.k, v = i.type === 'checkbox' ? i.checked : i.type === 'number' ? (parseFloat(i.value) || 0) : i.value;
+        if (k === 'floors') v = Math.max(1, v | 0);
+        f[k] = v; St.emit('change');
+      };
+    });
+    if ($('iw')) $('iw').onchange = $('idp').onchange = function () { St.snapshot(); E.resizeSelected(parseFloat($('iw').value), parseFloat($('idp').value)); St.emit('change'); };
+    $('bIcon').onclick = function () { $('fileIcon').value = ''; $('fileIcon').click(); };
+    $('bIconX').onclick = function () { E.clearIcon(); renderInsp(E.getSelected()); };
+    $('bDel').onclick = function () { St.snapshot(); E.deleteSelected(); };
+  }
+  $('fileIcon').onchange = function () {
+    if (this.files[0]) E.attachIcon(this.files[0]).then(function () { renderInsp(E.getSelected()); }).catch(function (e) { alert('Icon failed: ' + e.message); });
+  };
+  St.on('change', renderList);
+  St.on('select', function (f) { renderInsp(f); renderList(); });
+  renderInsp(null); renderList();
+
+  document.addEventListener('keydown', function (e) {
+    var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+    if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); St.redo(); }
+  });
+})();
+</script>
+</body>
+</html>
