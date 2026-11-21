@@ -4,7 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>SOS Emergency &amp; Evacuation 3D Master Studio</title>
-<link rel="stylesheet" href="css/style.css?v=5">
+<link rel="stylesheet" href="css/style.css?v=6">
+<style>
+  .cad-stat{background:#080b10;border:1px solid #1b2838;border-radius:4px;padding:6px 8px;font-size:10px;color:#00d9ff;line-height:1.5;margin-bottom:4px}
+  .cad-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:4px 0}
+  .cad-inline{display:flex;gap:4px;align-items:center;margin:3px 0}
+  .cad-inline input{width:70px;flex:1;min-width:0}
+  .cad-inline button{flex-shrink:0}
+  button.cy{border-color:#00d9ff!important;color:#00d9ff!important;background:rgba(0,217,255,.12)!important}
+  button.amb{border-color:#e8c84a!important;color:#e8c84a!important;background:rgba(232,200,74,.1)!important}
+</style>
 </head>
 <body>
 <header id="hud">
@@ -17,6 +26,7 @@
   <button id="btnClear" class="dng">Clear Data (OPSEC)</button>
   <span class="dv"></span>
   <button id="btnNorth">North Up</button>
+  <button id="btn2D" title="Toggle flat 2D CAD Top drafting view vs 3D Iso">View: 3D Iso</button>
   <button id="btnTheme">Theme: Cyber</button>
   <button id="btnQual">Quality: High</button>
   <button id="btnUndo">Undo</button>
@@ -34,16 +44,52 @@
 </header>
 <div id="main">
   <aside id="left">
-    <h3>Tools</h3>
+    <h3>AutoCAD Drafting Tools</h3>
     <div class="row"><button data-tool="select" class="on">Select</button><button data-tool="pan">Pan</button></div>
-    <div class="row"><button data-tool="add">Add</button><button data-tool="measure">Measure</button></div>
-    <select id="addType" title="Feature to add"></select>
+    <div class="row"><button data-tool="vertices" title="Drag corners, click (+) to add, Alt+Click to delete">Edit Vertices</button><button data-tool="measure">Measure</button></div>
+    <div class="row"><button data-tool="draw_poly" title="Click points, type length (m) + Enter">Draw Poly</button><button data-tool="draw_rect" title="2-point oriented 90-deg rectangle">Draw Rect</button></div>
+    <div class="row"><button data-tool="add">Stamp Add</button></div>
+    <select id="addType" title="Category for Draw / Stamp Add"></select>
+    <div id="cadDrawBtns" class="row" style="display:none"><button id="btnFinDraw" class="on">Finish (Enter)</button><button id="btnCanDraw" class="dng">Cancel</button></div>
     <div id="meas" class="mut">Measure: click two points</div>
+
+    <h3>CAD Precision (Snap / Ortho)</h3>
+    <div class="row">
+      <button id="btnOrtho" title="Lock to 90-deg orthogonal axes (F8)">ORTHO (F8): OFF</button>
+      <button id="btnOsnap" class="on" title="Snap to vertices & midpoints (F3)">OSNAP (F3): ON</button>
+    </div>
+    <label>Grid Snap
+      <select id="snapGrid">
+        <option value="0">Off (Free)</option>
+        <option value="0.25">0.25 m</option>
+        <option value="0.5">0.5 m</option>
+        <option value="1">1.0 m</option>
+        <option value="2">2.0 m</option>
+      </select>
+    </label>
+
+    <h3>Site &amp; Fence CAD</h3>
+    <p class="mut">Option A — Fence Only (keeps buildings real size):</p>
+    <div class="cad-inline">
+      <input type="number" id="fenceOffM" step="0.5" value="2" title="Expand (+) or shrink (-) perimeter fence in meters">
+      <button id="btnFenceOff" class="cy">Offset Fence (m)</button>
+    </div>
+    <div class="cad-inline">
+      <input type="number" id="fenceScPct" step="1" value="105" title="Scale fence only (%)">
+      <button id="btnFenceSc" class="cy">Scale Fence %</button>
+    </div>
+    <p class="mut">Option B — Scale Entire Village (all features + routes):</p>
+    <div class="cad-inline">
+      <input type="number" id="siteScPct" step="1" value="110" title="Uniformly scale all features, routes & pins (%)">
+      <button id="btnSiteSc" class="amb">Scale Site %</button>
+    </div>
+
     <h3>Camera</h3>
     <label>Orbit (<span id="yawV">0</span>&deg;)<input type="range" id="yaw" min="0" max="360" step="1" value="0"></label>
     <label>Tilt (<span id="pitchV">45</span>&deg;)<input type="range" id="pitch" min="0" max="75" step="1" value="45"></label>
     <div class="row"><button id="btnFit">Fit View</button></div>
-    <p class="mut">Wheel/pinch = zoom. Shift or right-drag = orbit. Two-finger twist = rotate.</p>
+    <p class="mut">Arrows = Pan. Q/E = Orbit. Shift/Right-drag = Orbit. Wheel = Zoom.</p>
+
     <h3>Layers</h3>
     <label class="ck"><input type="checkbox" data-layer="fence" checked>Fence</label>
     <label class="ck"><input type="checkbox" data-layer="build" checked>Buildings</label>
@@ -51,6 +97,7 @@
     <label class="ck"><input type="checkbox" data-layer="solar" checked>Solar &amp; Hazards</label>
     <label class="ck"><input type="checkbox" data-layer="trees" checked>Trees &amp; Yards</label>
     <label class="ck"><input type="checkbox" data-layer="routes" checked>Emergency Routes</label>
+    <label class="ck"><input type="checkbox" data-layer="dims" checked>CAD Dimensions (Selected)</label>
     <label class="ck"><input type="checkbox" data-layer="labels" checked>Labels</label>
     <label class="ck"><input type="checkbox" data-layer="grid" checked>Metric Grid</label>
     <label>3D Route Overlay
@@ -61,6 +108,7 @@
         <option value="off">Hidden</option>
       </select>
     </label>
+
     <h3>Local Draft</h3>
     <label class="ck"><input type="checkbox" id="chkAuto">Auto-save draft to this browser</label>
     <div class="row"><button id="btnRestore">Restore Draft</button></div>
@@ -68,7 +116,7 @@
   </aside>
   <div id="cv"><canvas id="c"></canvas></div>
   <aside id="right">
-    <h3>Inspector</h3>
+    <h3>Inspector &amp; CAD Geometry</h3>
     <div id="insp"></div>
     <h3>Features</h3>
     <div id="list"></div>
@@ -76,13 +124,13 @@
 </div>
 <div id="st">Ready. Import a .kml or .sos.json from your device.</div>
 
-<script src="js/state.js?v=5"></script>
-<script src="js/kmlParser.js?v=5"></script>
-<script src="js/engine.js?v=5"></script>
-<script src="js/interior.js?v=5"></script>
-<script src="js/routing.js?v=5"></script>
-<script src="js/signage.js?v=5"></script>
-<script src="js/exporter.js?v=5"></script>
+<script src="js/state.js?v=6"></script>
+<script src="js/kmlParser.js?v=6"></script>
+<script src="js/engine.js?v=6"></script>
+<script src="js/interior.js?v=6"></script>
+<script src="js/routing.js?v=6"></script>
+<script src="js/signage.js?v=6"></script>
+<script src="js/exporter.js?v=6"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -92,8 +140,10 @@
     ['shapeType', 'Shape type', 'sel', ['extrude', 'block', 'prism', 'marker']], ['roofType', 'Roof', 'sel', ['flat', 'red_tile', 'quonset', 'pyramid']],
     ['height_m', 'Height (m)', 'num'], ['floors', 'Floors', 'num'], ['rotationDeg', 'Rotation (deg)', 'num'], ['color', 'Color', 'color'],
     ['hazard_flag', 'Hazard flag', 'chk'], ['visible', 'Visible', 'chk'], ['notes', 'Notes', 'text']];
-  var ADD = [['building', 'Building'], ['cottage', 'Cottage'], ['tent', 'Tent'], ['pool', 'Covered Pool'], ['playground', 'Playground'],
-    ['parking', 'Parking Lot'], ['diesel_tank', 'Diesel Tank'], ['solar', 'Solar Array'], ['tree', 'Tree'], ['vehicle', 'Vehicle'],
+  var ADD = [['building', 'Building'], ['cottage', 'Cottage'], ['tent', 'Tent'], ['medical', 'Clinic / Medical'], ['security', 'Guard Room'],
+    ['pool', 'Covered Pool'], ['playground', 'Playground'], ['parking', 'Parking Lot'], ['diesel_tank', 'Diesel Tank'], ['solar', 'Solar Array'],
+    ['field', 'Football Field'], ['road', 'Road / Corridor'], ['yard', 'Courtyard'], ['fence', 'Perimeter Fence'], ['olive_zone', 'Olive Zone'],
+    ['hazard', 'Hazard Zone'], ['tree', 'Tree (Point)'], ['vehicle', 'Bus / Vehicle (Point)'], ['assembly', 'Assembly Point'],
     ['extinguisher', 'Fire Extinguisher'], ['camera', 'Camera'], ['custom', 'Custom Point']];
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function pick(btn, file, fn) { btn.onclick = function () { file.value = ''; file.click(); }; file.onchange = function () { if (file.files[0]) fn(file.files[0]); }; }
@@ -117,6 +167,7 @@
   $('btnSave').onclick = function () { St.saveProjectJSON(); };
   $('btnClear').onclick = function () { if (confirm('Wipe ALL workspace data, undo history and the saved browser draft?')) { St.clearWorkspace(); E.fitView(); } };
   $('btnNorth').onclick = function () { E.toggleNorthUp(); };
+  $('btn2D').onclick = function () { E.toggleTop2D(); };
   $('btnTheme').onclick = function () {
     var t = E.toggleTheme();
     $('btnTheme').textContent = 'Theme: ' + (t === 'print' ? 'Print' : 'Cyber');
@@ -140,9 +191,41 @@
   if (window.innerWidth < 800) { $('left').classList.add('hide'); $('right').classList.add('hide'); }
 
   var tools = document.querySelectorAll('[data-tool]');
-  function setTool(t) { E.setTool(t); [].forEach.call(tools, function (x) { x.classList.toggle('on', x.dataset.tool === t); }); }
+  function setTool(t) {
+    E.setTool(t);
+    [].forEach.call(tools, function (x) { x.classList.toggle('on', x.dataset.tool === t); });
+    $('cadDrawBtns').style.display = (t === 'draw_poly' || t === 'draw_rect') ? 'flex' : 'none';
+  }
   [].forEach.call(tools, function (b) { b.onclick = function () { setTool(b.dataset.tool); }; });
-  $('addType').onchange = function () { E.setAddType(this.value); setTool('add'); };
+  $('btnFinDraw').onclick = function () { if (E.finishDraw()) setTool('select'); };
+  $('btnCanDraw').onclick = function () { E.cancelDraw(); setTool('select'); };
+  $('addType').onchange = function () { E.setAddType(this.value); if (E.getTool() !== 'draw_poly' && E.getTool() !== 'draw_rect') setTool('add'); };
+
+  function syncCadBtns() {
+    var o = E.isOrtho(), s = E.isOsnap();
+    $('btnOrtho').textContent = 'ORTHO (F8): ' + (o ? 'ON' : 'OFF');
+    $('btnOrtho').classList.toggle('on', o);
+    $('btnOsnap').textContent = 'OSNAP (F3): ' + (s ? 'ON' : 'OFF');
+    $('btnOsnap').classList.toggle('on', s);
+  }
+  $('btnOrtho').onclick = function () { E.setOrtho(!E.isOrtho()); syncCadBtns(); };
+  $('btnOsnap').onclick = function () { E.setOsnap(!E.isOsnap()); syncCadBtns(); };
+  $('snapGrid').onchange = function () { E.setSnapGrid(this.value); };
+
+  // Site & Fence CAD Buttons (Option A & Option B)
+  $('btnFenceOff').onclick = function () {
+    if (!E.offsetFenceOnly($('fenceOffM').value)) alert('No Perimeter Fence polygon found.');
+  };
+  $('btnFenceSc').onclick = function () {
+    if (!E.scaleFenceOnly($('fenceScPct').value)) alert('No Perimeter Fence polygon found (or invalid %).');
+  };
+  $('btnSiteSc').onclick = function () {
+    var v = parseFloat($('siteScPct').value);
+    if (!(v > 10 && v < 1000)) { alert('Enter a valid percentage (e.g. 90 or 115).'); return; }
+    if (!confirm('Scale the ENTIRE village (all buildings, fence, routes & pins) to ' + v + '%? Note: This changes real KML meters (Undoable with Ctrl+Z).')) return;
+    E.scaleEntireSite(v);
+  };
+
   [].forEach.call(document.querySelectorAll('[data-layer]'), function (cb) { cb.onchange = function () { E.setLayer(cb.dataset.layer, cb.checked); }; });
   $('yaw').oninput = function () { E.setYaw(this.value); };
   $('pitch').oninput = function () { E.setPitch(this.value); };
@@ -152,13 +235,15 @@
   St.on('view', function (v) {
     $('yaw').value = Math.round(v.yaw); $('yawV').textContent = Math.round(v.yaw); $('pitch').value = Math.round(v.pitch); $('pitchV').textContent = Math.round(v.pitch);
     $('btnNorth').textContent = v.north ? 'North Up' : 'Site Align';
+    $('btn2D').textContent = v.top2D ? 'View: 2D CAD' : 'View: 3D Iso';
+    $('btn2D').classList.toggle('cy', !!v.top2D);
   });
   St.on('measure', function (m) {
-    $('meas').textContent = m ? m.d.toFixed(1) + ' m | ' + E.fmt(m.t12) + ' @1.2 m/s | ' + E.fmt(m.t08) + ' @0.8 m/s' : 'Measure: click two points';
+    $('meas').textContent = m ? m.d.toFixed(2) + ' m | ' + m.ang.toFixed(1) + '° | ' + E.fmt(m.t12) + ' @1.2 | ' + E.fmt(m.t08) + ' @0.8' : 'Measure: click two points';
   });
   St.on('status', function (d) {
     var m = d.meta;
-    $('st').textContent = 'X ' + d.x.toFixed(1) + ' m  Y ' + d.y.toFixed(1) + ' m | Area ' + Math.round(m.areaSqm || 0) + ' m2 | Perimeter ' + Math.round(m.perimeterM || 0) + ' m | Zoom ' + d.zoom.toFixed(2) + 'x | Features ' + d.count;
+    $('st').textContent = 'X ' + d.x.toFixed(2) + ' m  Y ' + d.y.toFixed(2) + ' m | Area ' + Math.round(m.areaSqm || 0) + ' m2 | Perim ' + Math.round(m.perimeterM || 0) + ' m | Zoom ' + d.zoom.toFixed(2) + 'x | ' + (d.ortho ? 'ORTHO ' : '') + (d.osnap ? 'OSNAP ' : '') + (d.snap ? ('GRID ' + d.snap + 'm') : '');
   });
 
   function renderList() {
@@ -172,8 +257,25 @@
     var el = $('insp');
     if (!f) { el.innerHTML = '<p class="mut">Select a feature on the canvas or from the list.</p>'; return; }
     var h = '';
-    if (f.geometryType === 'polygon' && INT_CATS.indexOf(f.category) >= 0) {
-      h += '<div class="row"><button id="bFloor" class="on">Edit Floor Plan</button></div>';
+    if (f.geometryType === 'polygon') {
+      var st = E.statsOf(f);
+      if (st) h += '<div class="cad-stat"><b>AREA:</b> ' + st.area.toFixed(1) + ' m&sup2; | <b>PERIM:</b> ' + st.perim.toFixed(1) + ' m | <b>PTS:</b> ' + st.verts + '</div>';
+      if (INT_CATS.indexOf(f.category) >= 0) h += '<div class="row"><button id="bFloor" class="on">Edit Floor Plan (Interiors)</button></div>';
+      h += '<div class="cad-grid">' +
+        '<button id="bVerts" class="cy" title="Edit jagged corners directly">Edit Vertices</button>' +
+        '<button id="bSq90" class="on" title="Make exact 90-degree architectural rectangle">Square 90&deg;</button>' +
+        '<button id="bSimp" title="Remove extra jagged points">Simplify</button>' +
+        '<button id="bAlign" title="Align walls parallel to village axis">Align Site</button>' +
+        '<button id="bMirH">Mirror H</button>' +
+        '<button id="bMirV">Mirror V</button>' +
+      '</div>' +
+      '<div class="cad-inline">' +
+        '<input type="number" id="offM" step="0.5" value="1" title="Offset polygon outward (+) or inward (-) in meters">' +
+        '<button id="bOff" class="cy">Offset (m)</button>' +
+        '<button id="bDup" title="Duplicate (Ctrl+D)">Clone</button>' +
+      '</div>';
+    } else {
+      h += '<div class="row"><button id="bDup" class="cy">Duplicate (Ctrl+D)</button></div>';
     }
     F.forEach(function (d) {
       var k = d[0], v = f[k], t = d[2], i;
@@ -188,12 +290,22 @@
     }
     if (f.geometryType === 'polygon') {
       var sz = E.sizeOf(f);
-      h += '<label>Width (m)<input type="number" id="iw" step="any" value="' + sz.w.toFixed(1) + '"></label><label>Depth (m)<input type="number" id="idp" step="any" value="' + sz.d.toFixed(1) + '"></label>';
+      h += '<label>Width (m)<input type="number" id="iw" step="any" value="' + sz.w.toFixed(2) + '"></label><label>Depth (m)<input type="number" id="idp" step="any" value="' + sz.d.toFixed(2) + '"></label>';
     }
     h += '<div class="row"><button id="bIcon">Icon...</button><button id="bIconX">Clear icon</button><button id="bDel" class="dng">Delete</button></div>';
     if (f.customIconBase64) h += '<img src="' + f.customIconBase64 + '" alt="icon" style="max-width:64px;max-height:64px;display:block">';
     el.innerHTML = h;
+
     if ($('bFloor')) $('bFloor').onclick = function () { S.Interior.open(f.id); };
+    if ($('bVerts')) $('bVerts').onclick = function () { setTool('vertices'); if (!E.isTop2D()) E.toggleTop2D(); };
+    if ($('bSq90')) $('bSq90').onclick = function () { E.squareSelected(); };
+    if ($('bSimp')) $('bSimp').onclick = function () { E.simplifySelected(0.6); };
+    if ($('bAlign')) $('bAlign').onclick = function () { E.alignSelectedToSite(); };
+    if ($('bMirH')) $('bMirH').onclick = function () { E.mirrorSelected('h'); };
+    if ($('bMirV')) $('bMirV').onclick = function () { E.mirrorSelected('v'); };
+    if ($('bOff')) $('bOff').onclick = function () { E.offsetSelected($('offM').value); };
+    if ($('bDup')) $('bDup').onclick = function () { E.duplicateSelected(); };
+
     [].forEach.call(el.querySelectorAll('[data-k]'), function (i) {
       i.onchange = function () {
         St.snapshot();
@@ -202,7 +314,7 @@
         f[k] = v; St.emit('change');
       };
     });
-    if ($('iw')) $('iw').onchange = $('idp').onchange = function () { St.snapshot(); E.resizeSelected(parseFloat($('iw').value), parseFloat($('idp').value)); St.emit('change'); };
+    if ($('iw')) $('iw').onchange = $('idp').onchange = function () { St.snapshot(); E.resizeSelected(parseFloat($('iw').value), parseFloat($('idp').value)); St.emit('change'); renderInsp(E.getSelected()); };
     $('bIcon').onclick = function () { $('fileIcon').value = ''; $('fileIcon').click(); };
     $('bIconX').onclick = function () { E.clearIcon(); renderInsp(E.getSelected()); };
     $('bDel').onclick = function () { St.snapshot(); E.deleteSelected(); };
@@ -212,11 +324,22 @@
   };
   St.on('change', renderList);
   St.on('select', function (f) { renderInsp(f); renderList(); });
-  renderInsp(null); renderList();
+  renderInsp(null); renderList(); syncCadBtns();
 
   document.addEventListener('keydown', function (e) {
     if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
+    if (e.key === 'F8') { e.preventDefault(); E.setOrtho(!E.isOrtho()); syncCadBtns(); return; }
+    if (e.key === 'F3') { e.preventDefault(); E.setOsnap(!E.isOsnap()); syncCadBtns(); return; }
+    if (e.key === 'Escape') { E.cancelDraw(); setTool('select'); return; }
+    if (E.handleCadKey(e)) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); E.nudgePan(-45, 0); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); E.nudgePan(45, 0); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); E.nudgePan(0, -45); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); E.nudgePan(0, 45); return; }
+    if (e.key.toLowerCase() === 'q' && !e.ctrlKey && !e.metaKey) { E.nudgeYaw(-15); return; }
+    if (e.key.toLowerCase() === 'e' && !e.ctrlKey && !e.metaKey) { E.nudgeYaw(15); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); E.duplicateSelected(); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); St.redo(); }
