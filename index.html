@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,14 +10,17 @@
 <header id="hud">
   <h1>SOS 3D MASTER STUDIO</h1>
   <button id="btnL" title="Toggle toolbar">&#9776; Tools</button>
+  <span class="dv"></span>
   <button id="btnKml">Import KML</button>
   <button id="btnLoad">Load .sos.json</button>
   <button id="btnSave">Save .sos.json</button>
   <button id="btnClear" class="dng">Clear Data (OPSEC)</button>
+  <span class="dv"></span>
   <button id="btnNorth">North Up</button>
   <button id="btnQual">Quality: High</button>
   <button id="btnUndo">Undo</button>
   <button id="btnRedo">Redo</button>
+  <span class="dv"></span>
   <button disabled>[Phase 2] Interiors</button>
   <button disabled>[Phase 2] Routing</button>
   <button disabled>[Phase 3] Signage</button>
@@ -147,6 +149,10 @@
       else i = '<input type="' + (t === 'num' ? 'number' : t === 'color' ? 'color' : 'text') + '" data-k="' + k + '" value="' + esc(v) + '"' + (k === 'ar_name' ? ' dir="rtl"' : '') + (t === 'num' ? ' step="any"' : '') + '>';
       h += '<label>' + d[1] + i + '</label>';
     });
+    if (f.category === 'tent' || f.category === 'cottage') {
+      var rm = E.renderModeOf(f);
+      h += '<label>Render Mode<select data-k="renderMode"><option value="auto"' + (rm === 'auto' ? ' selected' : '') + '>Auto-Units (Zone)</option><option value="solid"' + (rm === 'solid' ? ' selected' : '') + '>Single Solid Structure</option></select></label>';
+    }
     if (f.geometryType === 'polygon') {
       var sz = E.sizeOf(f);
       h += '<label>Width (m)<input type="number" id="iw" step="any" value="' + sz.w.toFixed(1) + '"></label><label>Depth (m)<input type="number" id="idp" step="any" value="' + sz.d.toFixed(1) + '"></label>';
