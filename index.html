@@ -24,7 +24,7 @@
   <span class="dv"></span>
   <button id="btnInt">Interiors</button>
   <button id="btnRoute">Routing</button>
-  <button id="btnSign" disabled>[Phase 3] Signage</button>
+  <button id="btnSign">Signage</button>
   <button id="btnExp" disabled>[Phase 4] Export Village</button>
   <span class="sp"></span>
   <button id="btnR" title="Toggle inspector">Inspector &#9776;</button>
@@ -81,6 +81,7 @@
 <script src="js/engine.js"></script>
 <script src="js/interior.js"></script>
 <script src="js/routing.js"></script>
+<script src="js/signage.js"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -129,6 +130,7 @@
     else S.Interior.pick();
   };
   $('btnRoute').onclick = function () { if (S.Routing) S.Routing.open(); };
+  $('btnSign').onclick = function () { if (S.Signage) S.Signage.open(); };
   $('routeView').onchange = function () { if (S.Routing) S.Routing.setOverlayMode(this.value); };
   $('btnFit').onclick = function () { E.fitView(); };
   $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
@@ -211,7 +213,7 @@
   renderInsp(null); renderList();
 
   document.addEventListener('keydown', function (e) {
-    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen())) return;
+    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
