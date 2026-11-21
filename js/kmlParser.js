@@ -1,6 +1,6 @@
 window.SOS = window.SOS || {};
 (function (S) {
-  var COL = { building: '#39ff14', cottage: '#c8935a', tent: '#9aa8b8', solar: '#1e50c8', olive_zone: '#4a9a3a', hazard: '#e8c84a', medical: '#ff3c3c',
+  var COL = { building: '#3b4c5e', cottage: '#c8935a', tent: '#9aa8b8', solar: '#1e50c8', olive_zone: '#4a9a3a', hazard: '#2b3138', medical: '#ff3c3c',
     security: '#00d9ff', gate: '#e8c84a', fence: '#77ffaa', field: '#2a7a2a', yard: '#445566', road: '#667788', assembly: '#00d9ff', vehicle: '#e8c84a' };
   var HT = { building: 6, cottage: 3, tent: 3.5, solar: 1.5, hazard: 3, medical: 4, security: 3, gate: 3, fence: 2.4, field: 0, yard: 0, road: 0, olive_zone: 0 };
   var ROOF = { building: 'flat', cottage: 'red_tile', tent: 'pyramid' };
@@ -78,9 +78,9 @@ window.SOS = window.SOS || {};
           id: d.feature_id || ('kml_' + r.i), ar_name: d.ar_name || '', en_name: d.en_name || r.name, category: cat,
           shapeType: r.poly ? 'extrude' : 'marker', geometryType: r.poly ? 'polygon' : 'point', coordsMetric: m,
           center: r.poly ? cen(m) : m[0], height_m: h, floors: floors, roofType: d.roof_type || ROOF[cat] || 'flat',
-          hazard_flag: /^(1|true|yes)$/i.test(d.hazard_flag || '') || cat === 'hazard', color: COL[cat] || '#39ff14'
+          hazard_flag: /^(1|true|yes)$/i.test(d.hazard_flag || '') || cat === 'hazard', color: COL[cat] || '#8aa0b5'
         });
-        if (r.poly) { f.areaSqm = area(m); f.perimeterM = perim(m); }
+        if (r.poly) { f.areaSqm = area(m); f.perimeterM = perim(m); if (cat === 'tent' || cat === 'cottage') f.renderMode = f.areaSqm > 45 ? 'auto' : 'solid'; }
         if (cat === 'fence' && r.poly && !fenceM) fenceM = m;
         feats.push(f);
       });
