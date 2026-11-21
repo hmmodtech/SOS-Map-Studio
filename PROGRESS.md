@@ -1,3 +1,4 @@
+Markdown
 # SOS Emergency & Evacuation 3D Master Studio — PROGRESS.md
 
 ## Architecture & Operational Constraints
@@ -68,3 +69,30 @@ Verified methods used by `index.html`:
       }
     }
   }
+Supported item.type values: stairs, main_entrance, emergency_exit, door, window, safe_haven, extinguisher, fire_alarm, smoke_detector, first_aid, desk, chair, meeting_table, cabinet, medical_bed.
+
+5. Verified Top-Bar DOM IDs (index.html)
+Active: #btnL, #btnKml, #btnLoad, #btnSave, #btnClear, #btnNorth, #btnQual, #btnUndo, #btnRedo, #btnInt, #btnR
+
+Placeholders ready for next phases:
+
+#btnRoute (disabled, [Phase 2B] Routing)
+
+#btnSign (disabled, [Phase 3] Signage)
+
+#btnExp (disabled, [Phase 4] Export Village)
+
+Handoff Notes for Phase 2B (js/routing.js)
+Enable #btnRoute (label: Routing) and integrate an exterior emergency routing graph stored in window.SOS.State.project.routes:
+
+fire protocol (cyber green #39ff14): connects rooms/zones/exits to the primary Assembly Point (assembly_point_primary) and Evacuation Bus (evacuation_bus), with support for adding/switching alternate assembly points later.
+
+shelling protocol (cyan/purple #00d9ff / #a06bff): routes personnel to concrete Safe Havens (building_3story / interior safe_haven markers) while avoiding exposed open routes.
+
+Implement shortest-path calculation (Dijkstra) with:
+
+Metric distance (m) and estimated evacuation times (1.2 m/s standard & 0.8 m/s children/evacuation pace).
+
+Interactive Simulate Blocked Node/Edge (Hazard) toggle to verify automatic rerouting.
+
+Verify js/state.js preserves both project.interiors and project.routes across saveProjectJSON(), loadProjectJSON(), snapshot(), and clearWorkspace().
