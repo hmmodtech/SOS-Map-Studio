@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>SOS Emergency &amp; Evacuation 3D Master Studio</title>
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
 <header id="hud">
@@ -25,7 +25,7 @@
   <button id="btnInt">Interiors</button>
   <button id="btnRoute">Routing</button>
   <button id="btnSign">Signage</button>
-  <button id="btnExp" disabled>[Phase 4] Export Village</button>
+  <button id="btnExp" class="on">Export Village</button>
   <span class="sp"></span>
   <button id="btnR" title="Toggle inspector">Inspector &#9776;</button>
   <input type="file" id="fileKml" accept=".kml,application/vnd.google-earth.kml+xml,text/xml" hidden>
@@ -76,12 +76,13 @@
 </div>
 <div id="st">Ready. Import a .kml or .sos.json from your device.</div>
 
-<script src="js/state.js"></script>
-<script src="js/kmlParser.js"></script>
-<script src="js/engine.js"></script>
-<script src="js/interior.js"></script>
-<script src="js/routing.js"></script>
-<script src="js/signage.js"></script>
+<script src="js/state.js?v=4"></script>
+<script src="js/kmlParser.js?v=4"></script>
+<script src="js/engine.js?v=4"></script>
+<script src="js/interior.js?v=4"></script>
+<script src="js/routing.js?v=4"></script>
+<script src="js/signage.js?v=4"></script>
+<script src="js/exporter.js?v=4"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -131,6 +132,7 @@
   };
   $('btnRoute').onclick = function () { if (S.Routing) S.Routing.open(); };
   $('btnSign').onclick = function () { if (S.Signage) S.Signage.open(); };
+  $('btnExp').onclick = function () { if (S.Exporter) S.Exporter.open(); };
   $('routeView').onchange = function () { if (S.Routing) S.Routing.setOverlayMode(this.value); };
   $('btnFit').onclick = function () { E.fitView(); };
   $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
@@ -213,7 +215,7 @@
   renderInsp(null); renderList();
 
   document.addEventListener('keydown', function (e) {
-    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen())) return;
+    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'Delete' || e.key === 'Backspace') { if (E.getSelected()) { St.snapshot(); E.deleteSelected(); } }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? St.redo() : St.undo(); }
