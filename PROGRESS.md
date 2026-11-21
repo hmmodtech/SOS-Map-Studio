@@ -1,74 +1,36 @@
 # SOS Emergency & Evacuation 3D Master Studio — PROGRESS.md
 
-## Architecture & Operational Constraints
-- **Deployment Model:** Zero-build, zero-dependency static web app hosted on GitHub Pages (`Plan B OPSEC`: **ZERO** real GPS coordinates, site layouts, village names, or staff data hardcoded in the repository).
-- **Local Data Workflow:** Site KML (`SOS-Village-Clean.kml`) and project state (`.sos.json`) remain strictly local on the operator's device and are imported/exported at runtime.
-- **Namespace:** Global `window.SOS = window.SOS || {};` using classic `<script src="js/..."></script>` tags (no ES modules, no CDNs, no bundlers).
+## System Status: ALL 4 PHASES COMPLETE (Production-Ready Zero-Build Architecture)
+- **Deployment Model:** Zero-build, zero-dependency static web app hosted on GitHub Pages (`Plan B OPSEC`: **ZERO** real GPS coordinates, site layouts, village names, or staff data hardcoded in the repository). Ready for seamless migration to **Plan A** (Private Repo + Cloudflare Pages + Cloudflare Access) upon management approval.
+- **Local Data Workflow:** Site KML (`SOS-Village-Clean.kml`) and master project file (`.sos.json`) stay strictly local on the operator's device.
+- **Namespace:** Global `window.SOS = window.SOS || {};` with classic `<script src="js/..."></script>` tags and `?v=4` cache-busting query strings.
 - **Dual Visual Identity:**
-  - **Master Studio HUD & Default Canvas (`cyber`):** Dark Neon Matrix Cyber HUD (`#080b10`, `#0e141d`, `#1b2838`, `#39ff14`, `#e8c84a`, `#ff3c3c`, `#00d9ff`, `#a06bff`).
-  - **Daylight Print Architectural Canvas (`print`):** Warm paper backdrop (`#f6f1e7`), sandy terrain (`#f1dbb0`), dark architectural ink outlines, sun drop shadows, Red Crescent clinic, white tents, wooden cottages, oriented football field, multi-tone olive trees, cylindrical diesel tank, blue-and-white bus.
-- **UI Language:** Master Studio is **100% English**; generated Wall Posters and exported Village Field Edition are **bilingual (Arabic / English)**.
+  - **Master Studio (`cyber` default + `print` toggle):** Dark Neon Matrix Cyber HUD (`#080b10`, `#0e141d`, `#39ff14`, `#e8c84a`, `#ff3c3c`, `#00d9ff`).
+  - **Wall Signage & Village Field Edition (`print` default + `dark` toggle):** Daylight Print architectural styling (warm off-white backdrop, sandy compound terrain, sun drop shadows, Red Crescent clinic, white tents, wooden cottages, oriented football field, multi-tone olive trees, cylindrical diesel tank, blue-and-white bus).
 
 ---
 
-## Repository Structure & Status
-- `index.html` — **[DONE — Phase 3 wired]** Cyber HUD shell, `#btnTheme`, `#btnInt`, `#btnRoute`, `#btnSign` active, modal keyboard guards.
-- `css/style.css` — **[DONE — Phase 1.1]** Single-row top HUD bar, responsive Cyber HUD layout.
-- `js/state.js` — **[DONE — Phase 1, verified]** Full `.sos.json` persistence (`meta.qrBaseUrl`, `features`, `interiors`, `routes`, `signagePins`), undo/redo, draft, OPSEC wipe.
-- `js/kmlParser.js` — **[DONE — Phase 1.1]** KML 2.2 metric parser.
-- `js/engine.js` — **[DONE — Phase 2.5]** Dual-theme (`cyber` / `print`) Canvas 2D 2.5D/3D isometric engine + extra facilities (`pool`, `playground`, `parking`, `diesel_tank`) + 3D route overlay.
-- `js/interior.js` — **[DONE — Phase 2A]** Self-contained 2D architectural cutaway floor plan editor.
-- `js/routing.js` — **[DONE — Phase 2B]** Self-contained 2D Top-Down Emergency Routing Studio (Fire & Shelling graphs, Auto-Seed, Auto-Connect, Dijkstra, Blocked Path/Hazard simulator, 3D overlay).
-- `js/signage.js` — **[DONE — Phase 3]** Self-contained Context-Aware A3/A4 Wall Signage Generator (injects `<style id="sos-signage-css">`), verified pure-JS ISO/IEC 18004 QR encoder (`V1–V10`, EC-M), editable `meta.qrBaseUrl` settings with presets, Exterior & Interior floor posters, `YOU ARE HERE` pin + Heads-Up auto-rotation, live Dijkstra Fire/Shelling paths & nearest fire extinguisher callout, live Poster Preview, 150/300 DPI PNG export, Saved Pins manager + Batch Export.
-- `js/exporter.js` — **[NEXT — Phase 4]** Standalone `village.html` exporter (<400 KB, Zero External CDNs, Read-Only bilingual AR/EN, defaults to Daylight Print theme with Night toggle, supports `?alert=fire`, `?alert=shelling`, `?loc=zone_id`, 1-tap "Where are you now?" panic modal, offline Web Audio emergency sirens, optional MikroTik Captive Portal deployment guide & RouterOS script generator).
+## Repository Structure (Complete)
+- `index.html` — **[COMPLETE — v4]** Cyber HUD shell, all 4 modules active (`Interiors`, `Routing`, `Signage`, `Export Village`), `?v=4` cache busting, modal keyboard guards.
+- `css/style.css` — **[COMPLETE]** Single-row top HUD bar, responsive desktop & mobile Cyber HUD layout.
+- `js/state.js` — **[COMPLETE]** Full `.sos.json` persistence (`meta`, `qrBaseUrl`, `exportConfig`, `features`, `interiors`, `routes`, `signagePins`), 30-step undo/redo, optional draft, OPSEC wipe.
+- `js/kmlParser.js` — **[COMPLETE]** KML 2.2 metric parser (ignores hidden folders, reads `ExtendedData`, calculates metric area/perimeter & `trueNorthOffsetDeg`).
+- `js/engine.js` — **[COMPLETE]** Dual-theme (`cyber` / `print`) Canvas 2D 2.5D/3D isometric engine, label collision prevention, narrow-polygon tent/cottage fallback, extra assets (`pool`, `playground`, `parking`, `diesel_tank`), Base64 icon compressor, metric ruler, live animated 3D route overlay.
+- `js/interior.js` — **[COMPLETE — Phase 2A]** Self-contained 2D architectural cutaway floor plan editor (multi-floor tabs, stair ghost alignment, snap-to-grid, quick templates, Safe Haven & fire safety items, PNG export).
+- `js/routing.js` — **[COMPLETE — Phase 2B]** Self-contained 2D Top-Down Emergency Routing Studio (Fire & Shelling graphs, Auto-Seed, Auto-Connect Prim MST + alternate links, Dijkstra shortest path + evacuation times at `1.2 m/s` & `0.8 m/s`, Blocked Path/Hazard simulator, 3D overlay).
+- `js/signage.js` — **[COMPLETE — Phase 3]** Self-contained A3/A4 Wall Signage Generator with verified pure-JS ISO/IEC 18004 QR encoder (`V1–V10`, EC-M), editable `meta.qrBaseUrl` settings, Exterior & Interior floor posters, `YOU ARE HERE` + Heads-Up auto-rotation, live Dijkstra Fire/Shelling paths & nearest fire extinguisher callout, 150/300 DPI PNG export + Batch Export.
+- `js/exporter.js` — **[COMPLETE — Phase 4]** Self-contained Village Field Edition Exporter + MikroTik RouterOS IT Helper:
+  - Generates 100% standalone, zero-CDN, read-only `village.html` (<400 KB target with live size check).
+  - Features: Bilingual AR/EN (default Arabic), Daylight Print + Night toggle, `?loc=` & `?alert=fire|shelling` URL params, Panic-First 4-zone quick picker, GPS jamming/out-of-bounds guard (>250m fallback), offline Web Audio API emergency siren, read-only interior floor plan viewer, and live preview buttons.
+  - Includes MikroTik RouterOS deployment tab (Captive Portal redirect stub + RouterOS trigger/clear scripts for IT review).
 
 ---
 
 ## Verified Public API Contracts (`window.SOS`)
-
-### 1. `window.SOS.State` (`js/state.js`)
-- `project`: `{ meta: { qrBaseUrl, ... }, features, customAssets, interiors, routes: { fire: { nodes, edges }, shelling: { nodes, edges } }, signagePins }`
-- Methods: `blank()`, `newFeature(o)`, `merge(p)`, `on(e, f)`, `emit(e, d)`, `snapshot()`, `undo()`, `redo()`, `saveProjectJSON()`, `loadProjectJSON(file)`, `autoSaveDraft()`, `restoreDraft()`, `clearWorkspace()`.
-
-### 2. `window.SOS.Engine` (`js/engine.js`)
-- Methods: `init(cv)`, `setTool(t)`, `setAddType(t)`, `setYaw(v)`, `setPitch(v)`, `setQuality(h)`, `isHQ()`, `getTheme()`, `setTheme('cyber'|'print')`, `toggleTheme()`, `setLayer(k, v)`, `toggleNorthUp()`, `fitView()`, `select(id)`, `getSelected()`, `deleteSelected()`, `sizeOf(f)`, `resizeSelected(w, d)`, `attachIcon(file)`, `clearIcon()`, `getMeasure()`, `fmt(s)`, `renderModeOf(f)`, `project(x, y, z)`, `getCanvas()`, `render()`.
-
-### 3. `window.SOS.Interior` (`js/interior.js`)
-- Methods: `open(featureId)`, `close()`, `pick()`, `isOpen()`.
-
-### 4. `window.SOS.Routing` (`js/routing.js`)
-- Methods: `open()`, `close()`, `isOpen()`, `setOverlayMode('both'|'fire'|'shelling'|'off')`, `getOverlayMode()`, `solveDijkstra(protocol, startId, goalFilter)`, `drawOn3D(ctx, P, sc)`, `hasActiveAnim()`.
-
-### 5. `window.SOS.Signage` (`js/signage.js`)
-- Methods: `open()`, `close()`, `isOpen()`, `encodeQR(text)`, `drawQR(ctx, text, x, y, size)`.
-- **Verified Signage Pin Schema** (`window.SOS.State.project.signagePins[]`):
-  ```json
-  {
-    "id": "pin_...",
-    "locCode": "office_f1",
-    "en_name": "Main Corridor Poster",
-    "ar_name": "لوحة الممر الرئيسي",
-    "scope": "exterior|interior",
-    "featureId": null,
-    "floor": "1",
-    "x": 0,
-    "y": 0,
-    "facingDeg": 0,
-    "headsUp": true,
-    "paper": "A3_L|A3_P|A4_L|A4_P",
-    "dpi": 150,
-    "showQR": true,
-    "showFire": true,
-    "showShelling": true
-  }
-6. Top-Bar Placeholders Remaining (index.html)
-​#btnExp (disabled, [Phase 4] Export Village)
-​Handoff Notes for Phase 4 (js/exporter.js)
-​1. Enable #btnExp (label: Export Village) and build a clean Export Studio modal producing a 100% standalone, zero-CDN, read-only village.html file (<400 KB) embedding the active .sos.json payload (features, interiors, routes, signagePins).
-​2. village.html features:
-​Bilingual Arabic / English switcher (default Arabic for village residents/mothers/children), Daylight Print architectural theme default + Night toggle.
-​URL parameter support: ?loc=<locCode> (matches signagePins or feature IDs to auto-place YOU ARE HERE) and ?alert=fire / ?alert=shelling (auto-triggers Panic-First UI + Web Audio siren pattern + animated route arrows).
-​1-Tap "أين أنت الآن؟ / Where are you now?" 4-zone quick picker if opened without ?loc=.
-​Optional GPS assist button (only activates gracefully when served over HTTPS and permission granted).
-​Read-only floor plan viewer for buildings with saved interiors.
-​3. Include a MikroTik RouterOS Deployment Helper tab inside the Export modal generating ready-to-paste RouterOS commands for local offline Hotspot Captive Portal emergency redirect (editable IP/interface fields once IT grants access).
+- `window.SOS.State` (`js/state.js`): `project`, `blank()`, `newFeature()`, `merge()`, `on()`, `emit()`, `snapshot()`, `undo()`, `redo()`, `saveProjectJSON()`, `loadProjectJSON()`, `autoSaveDraft()`, `restoreDraft()`, `clearWorkspace()`.
+- `window.SOS.KMLParser` (`js/kmlParser.js`): `parse(xmlText)`.
+- `window.SOS.Engine` (`js/engine.js`): `init()`, `setTool()`, `setAddType()`, `setYaw()`, `setPitch()`, `setQuality()`, `isHQ()`, `getTheme()`, `setTheme()`, `toggleTheme()`, `setLayer()`, `toggleNorthUp()`, `fitView()`, `select()`, `getSelected()`, `deleteSelected()`, `sizeOf()`, `resizeSelected()`, `attachIcon()`, `clearIcon()`, `getMeasure()`, `fmt()`, `renderModeOf()`, `project()`, `getCanvas()`, `render()`.
+- `window.SOS.Interior` (`js/interior.js`): `open()`, `close()`, `pick()`, `isOpen()`.
+- `window.SOS.Routing` (`js/routing.js`): `open()`, `close()`, `isOpen()`, `setOverlayMode()`, `getOverlayMode()`, `solveDijkstra()`, `drawOn3D()`, `hasActiveAnim()`.
+- `window.SOS.Signage` (`js/signage.js`): `open()`, `close()`, `isOpen()`, `encodeQR()`, `drawQR()`.
+- `window.SOS.Exporter` (`js/exporter.js`): `open()`, `close()`, `isOpen()`, `generateHtml(overrideAlert, overrideLoc)`.
