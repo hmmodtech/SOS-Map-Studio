@@ -50,7 +50,6 @@ window.SOS = window.SOS || {};
       return out;
     }
     var ALIGN = { 1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50] };
-    // [ver, ec_cw, b1, d1, b2, d2] for Error Correction Level M (ecBits=0)
     var VER_M = [
       [1, 10, 1, 16, 0, 0], [2, 16, 1, 28, 0, 0], [3, 26, 1, 44, 0, 0], [4, 18, 2, 32, 0, 0], [5, 24, 2, 43, 0, 0],
       [6, 16, 4, 27, 0, 0], [7, 18, 4, 31, 0, 0], [8, 22, 2, 38, 2, 39], [9, 22, 3, 36, 2, 37], [10, 26, 4, 43, 1, 44]
@@ -223,8 +222,10 @@ window.SOS = window.SOS || {};
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function nid(p) { return p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
   function fmt(sec) { var m = Math.floor(sec / 60), s = Math.round(sec % 60); return m ? (m + 'm ' + (s < 10 ? '0' : '') + s + 's') : (s + 's'); }
+  function cl(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function cen(a) { var x = 0, y = 0; a.forEach(function (p) { x += p.x; y += p.y; }); return { x: x / a.length, y: y / a.length }; }
   function bb(a) { var b = { x0: 1e18, y0: 1e18, x1: -1e18, y1: -1e18 }; a.forEach(function (p) { b.x0 = Math.min(b.x0, p.x); b.x1 = Math.max(b.x1, p.x); b.y0 = Math.min(b.y0, p.y); b.y1 = Math.max(b.y1, p.y); }); return b; }
+  function area(a) { var s = 0; for (var i = 0; i < a.length; i++) { var q = a[(i + 1) % a.length]; s += a[i].x * q.y - q.x * a[i].y; } return Math.abs(s) / 2; }
   function featPts(f) {
     var r = (f.rotationDeg || 0) * D, c = Math.cos(r), n = Math.sin(r), m = f.center || { x: 0, y: 0 };
     return (f.coordsMetric || []).map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: m.x + dx * c - dy * n, y: m.y + dx * n + dy * c }; });
@@ -244,12 +245,15 @@ window.SOS = window.SOS || {};
     return .5 * Math.atan2(sy, sx);
   }
   function hash(s) { var v = 7; for (var i = 0; i < s.length; i++) v = (v * 31 + s.charCodeAt(i)) >>> 0; return v; }
+  function shade(hex, k) {
+    if (!hex || hex[0] !== '#' || hex.length !== 7) return hex || '#888';
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgb(' + cl((n >> 16 & 255) * k | 0, 0, 255) + ',' + cl((n >> 8 & 255) * k | 0, 0, 255) + ',' + cl((n & 255) * k | 0, 0, 255) + ')';
+  }
 
   function ensureMeta() {
     if (!St.project.meta) St.project.meta = {};
     if (typeof St.project.meta.qrBaseUrl !== 'string') St.project.meta.qrBaseUrl = '';
-    if (typeof St.project.meta.posterSubtitleEn !== 'string') St.project.meta.posterSubtitleEn = 'Safety & Security Emergency Plan';
-    if (typeof St.project.meta.posterSubtitleAr !== 'string') St.project.meta.posterSubtitleAr = 'خطة الطوارئ والإخلاء المعتمدة';
     if (!Array.isArray(St.project.signagePins)) St.project.signagePins = [];
   }
 
@@ -261,6 +265,7 @@ window.SOS = window.SOS || {};
       en_name: 'Wall Sign ' + idx,
       ar_name: 'لوحة جدارية ' + idx,
       scope: 'exterior',
+      view3D: true,
       featureId: null,
       floor: '1',
       x: 0,
@@ -305,7 +310,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // CONTEXT-AWARE ROUTE & EXTINGUISHER SOLVER FOR ANY PIN
+  // CONTEXT-AWARE ROUTE & EXTINGUISHER SOLVER
   // =========================================================================
   function solvePinContext(pin) {
     var out = { firePath: null, fireDist: 0, shellingPath: null, shellingDist: 0, nearestExt: null, extDist: 0 };
@@ -320,20 +325,15 @@ window.SOS = window.SOS || {};
           var prio = it.type === 'emergency_exit' ? d * 0.85 : d;
           if (prio < dExit) { dExit = prio; bestExit = { x: it.x, y: it.y, dist: d, label: it.en_name || it.type.replace('_', ' ') }; }
         }
-        if (it.type === 'safe_haven' && d < dHaven) {
-          dHaven = d; bestHaven = { x: it.x, y: it.y, dist: d, label: it.en_name || 'Safe Haven' };
-        }
-        if (it.type === 'extinguisher' && d < dExt) {
-          dExt = d; bestExt = { x: it.x, y: it.y, dist: d };
-        }
+        if (it.type === 'safe_haven' && d < dHaven) { dHaven = d; bestHaven = { x: it.x, y: it.y, dist: d, label: it.en_name || 'Safe Haven' }; }
+        if (it.type === 'extinguisher' && d < dExt) { dExt = d; bestExt = { x: it.x, y: it.y, dist: d }; }
       });
-      if (bestExit) { out.firePath = [{ x: pin.x, y: pin.y }, { x: bestExit.x, y: bestExit.y }]; out.fireDist = bestExit.dist; out.fireTarget = bestExit.label; }
-      if (bestHaven) { out.shellingPath = [{ x: pin.x, y: pin.y }, { x: bestHaven.x, y: bestHaven.y }]; out.shellingDist = bestHaven.dist; out.shellingTarget = bestHaven.label; }
+      if (bestExit) { out.firePath = [{ x: pin.x, y: pin.y }, { x: bestExit.x, y: bestExit.y }]; out.fireDist = bestExit.dist; }
+      if (bestHaven) { out.shellingPath = [{ x: pin.x, y: pin.y }, { x: bestHaven.x, y: bestHaven.y }]; out.shellingDist = bestHaven.dist; }
       if (bestExt) { out.nearestExt = bestExt; out.extDist = bestExt.dist; }
       return out;
     }
 
-    // Exterior routing using Phase 2B Dijkstra graph
     function solveExt(proto, goalMode) {
       var g = St.project.routes && St.project.routes[proto];
       if (!g || !g.nodes || !g.nodes.length || !S.Routing || !S.Routing.solveDijkstra) return null;
@@ -351,12 +351,12 @@ window.SOS = window.SOS || {};
       res.nodeIds.forEach(function (id) {
         for (var i = 0; i < g.nodes.length; i++) if (g.nodes[i].id === id) { pts.push({ x: g.nodes[i].x, y: g.nodes[i].y }); break; }
       });
-      return { pts: pts, dist: res.distance + bd, target: res.target ? (res.target.en_name || res.target.type) : '' };
+      return { pts: pts, dist: res.distance + bd };
     }
     var fr = solveExt('fire', 'assembly');
-    if (fr) { out.firePath = fr.pts; out.fireDist = fr.dist; out.fireTarget = fr.target; }
+    if (fr) { out.firePath = fr.pts; out.fireDist = fr.dist; }
     var sh = solveExt('shelling', 'any');
-    if (sh) { out.shellingPath = sh.pts; out.shellingDist = sh.dist; out.shellingTarget = sh.target; }
+    if (sh) { out.shellingPath = sh.pts; out.shellingDist = sh.dist; }
 
     var bestE = null, dE = 1e18;
     (St.project.features || []).forEach(function (f) {
@@ -371,7 +371,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // DAYLIGHT PRINT ARCHITECTURAL MAP RENDERER (EXTERIOR & INTERIOR)
+  // DAYLIGHT PRINT 3D ISOMETRIC & 2D PLAN RENDERER
   // =========================================================================
   function drawArrowHead(c, x1, y1, x2, y2, col, sz) {
     var ang = Math.atan2(y2 - y1, x2 - x1), mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
@@ -384,21 +384,17 @@ window.SOS = window.SOS || {};
   function drawYouAreHere(c, sx, sy, uScale, facingScreenRad) {
     var r = Math.max(10, 14 * uScale);
     c.save();
-    // Pulsing-style concentric print rings
     c.beginPath(); c.arc(sx, sy, r * 1.75, 0, 6.3); c.fillStyle = 'rgba(220,38,38,0.18)'; c.fill();
     c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(1.5, 2 * uScale); c.stroke();
-    // Facing direction cone
     c.save(); c.translate(sx, sy); c.rotate(facingScreenRad);
     c.beginPath(); c.moveTo(0, 0); c.arc(0, 0, r * 2.5, -Math.PI / 2 - 0.36, -Math.PI / 2 + 0.36); c.closePath();
     c.fillStyle = 'rgba(234,179,8,0.42)'; c.fill();
     c.strokeStyle = '#b45309'; c.lineWidth = Math.max(1.2, 1.5 * uScale);
     c.beginPath(); c.moveTo(0, 0); c.lineTo(0, -r * 2.4); c.stroke();
     c.restore();
-    // Red-yellow center pin
     c.beginPath(); c.arc(sx, sy, r * 0.9, 0, 6.3); c.fillStyle = '#dc2626'; c.fill();
     c.strokeStyle = '#facc15'; c.lineWidth = Math.max(2, 2.8 * uScale); c.stroke();
     c.beginPath(); c.arc(sx, sy, r * 0.3, 0, 6.3); c.fillStyle = '#ffffff'; c.fill();
-    // Bilingual badge
     var fs = Math.max(10, Math.round(12 * uScale));
     c.font = 'bold ' + fs + 'px ' + SANS;
     var txt = 'أنت هنا • YOU ARE HERE';
@@ -411,13 +407,11 @@ window.SOS = window.SOS || {};
   }
 
   function drawPrintCompass(c, cx, cy, rad, northAngRad) {
-    // northAngRad = angle CCW from Up (+Y): nx = -sin(a), ny = cos(a)
     var nx = -Math.sin(northAngRad), ny = Math.cos(northAngRad);
     c.save();
     c.beginPath(); c.arc(cx, cy, rad, 0, 6.3);
     c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill();
     c.strokeStyle = '#1e293b'; c.lineWidth = Math.max(1.5, rad * 0.05); c.stroke();
-    // N/S needle
     c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + nx * rad * 0.65, cy - ny * rad * 0.65);
     c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(2.5, rad * 0.11); c.stroke();
     c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx - nx * rad * 0.55, cy + ny * rad * 0.55);
@@ -431,6 +425,9 @@ window.SOS = window.SOS || {};
   function drawExteriorDaylightMap(c, rect, pin, ctxRes, rotRad, customView) {
     var x0 = rect.x, y0 = rect.y, rw = rect.w, rh = rect.h;
     var fs = (St.project.features || []).filter(function (f) { return f.visible !== false; });
+    var use3D = pin.view3D !== false;
+    var tilt = use3D ? (42 * D) : 0;
+    var cosT = Math.cos(tilt), sinT = Math.sin(tilt);
     var ca = Math.cos(rotRad), sa = Math.sin(rotRad);
     function rotPt(p) { return { x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca }; }
 
@@ -442,27 +439,30 @@ window.SOS = window.SOS || {};
       fs.forEach(function (f) { featPts(f).forEach(function (p) { all.push(rotPt(p)); }); });
       all.push(rotPt({ x: pin.x, y: pin.y }));
       var b = all.length ? bb(all) : { x0: -40, x1: 40, y0: -40, y1: 40 };
-      var bw = Math.max(15, b.x1 - b.x0), bh = Math.max(15, b.y1 - b.y0);
-      s = 0.84 * Math.min(rw / bw, rh / bh);
+      var bw = Math.max(15, b.x1 - b.x0), bh = Math.max(15, (b.y1 - b.y0) * Math.max(0.55, cosT));
+      s = 0.82 * Math.min(rw / bw, rh / bh);
       ox = x0 + rw / 2 - ((b.x0 + b.x1) / 2) * s;
-      oy = y0 + rh / 2 + ((b.y0 + b.y1) / 2) * s;
+      oy = y0 + rh / 2 + ((b.y0 + b.y1) / 2) * s * cosT;
     }
-    function T(p) { var q = rotPt(p); return [ox + q.x * s, oy - q.y * s]; }
+    function P3(x, y, z) {
+      var q = rotPt({ x: x, y: y });
+      return [ox + q.x * s, oy - q.y * s * cosT - (z || 0) * s * sinT, q.y];
+    }
+    function T(p) { return P3(p.x, p.y, 0); }
     var uScale = Math.max(0.7, Math.min(2.6, Math.min(rw, rh) / 680));
 
     c.save();
     c.beginPath(); c.rect(x0, y0, rw, rh); c.clip();
     c.fillStyle = '#f6f1e7'; c.fillRect(x0, y0, rw, rh);
 
-    // Subtle architectural grid
     var st = [5, 10, 20, 50].filter(function (v) { return v * s >= 45; })[0] || 50;
     c.strokeStyle = 'rgba(100,85,65,0.1)'; c.lineWidth = Math.max(0.8, 0.8 * uScale);
     for (var gx = -300; gx <= 300; gx += st) {
-      var p1 = T({ x: gx, y: -300 }), p2 = T({ x: gx, y: 300 });
+      var p1 = P3(gx, -300, 0), p2 = P3(gx, 300, 0);
       c.beginPath(); c.moveTo(p1[0], p1[1]); c.lineTo(p2[0], p2[1]); c.stroke();
     }
     for (var gy = -300; gy <= 300; gy += st) {
-      var q1 = T({ x: -300, y: gy }), q2 = T({ x: 300, y: gy });
+      var q1 = P3(-300, gy, 0), q2 = P3(300, gy, 0);
       c.beginPath(); c.moveTo(q1[0], q1[1]); c.lineTo(q2[0], q2[1]); c.stroke();
     }
 
@@ -473,125 +473,191 @@ window.SOS = window.SOS || {};
       if (fill) { c.fillStyle = fill; c.fill(); }
       if (stroke) { c.strokeStyle = stroke; c.lineWidth = lw || Math.max(1, 1.2 * uScale); c.stroke(); }
     }
-
-    // 1. Compound sandy terrain inside perimeter fence
-    fs.forEach(function (f) {
-      if (f.category === 'fence' && f.geometryType === 'polygon') {
-        poly(featPts(f).map(T), '#f1dbb0', '#4b5563', Math.max(2, 2.6 * uScale));
+    function ln3(u, v) { c.beginPath(); c.moveTo(u[0], u[1]); c.lineTo(v[0], v[1]); c.stroke(); }
+    function shadow3(a, h) {
+      if (!use3D || !(h > 0.2)) return;
+      poly(a.map(function (p) { return P3(p.x + h * 0.42, p.y - h * 0.34, 0); }), 'rgba(40,34,24,0.22)');
+    }
+    function ext3(a, h, col, fl, winCol, edgeCol) {
+      if (!use3D || !(h > 0.1)) return;
+      var ws = [];
+      for (var i = 0; i < a.length; i++) {
+        var p = a[i], q = a[(i + 1) % a.length];
+        ws.push({ p: p, q: q, d: P3((p.x + q.x) / 2, (p.y + q.y) / 2, 0)[2], L: Math.hypot(q.x - p.x, q.y - p.y) });
       }
+      ws.sort(function (u, v) { return v.d - u.d; });
+      ws.forEach(function (w) {
+        function at(t, z) { return P3(w.p.x + (w.q.x - w.p.x) * t, w.p.y + (w.q.y - w.p.y) * t, z); }
+        poly([at(0, 0), at(1, 0), at(1, h), at(0, h)], shade(col, 0.9), edgeCol || '#2b3440', Math.max(1, 1.1 * uScale));
+        c.strokeStyle = '#64748b';
+        for (var k = 1; k < fl; k++) ln3(at(0, h * k / fl), at(1, h * k / fl));
+        if (winCol && w.L > 3 && s > 1.1) {
+          for (var k2 = 0; k2 < fl; k2++) for (var sx = 1; sx < w.L - 2; sx += 2.6) {
+            poly([at(sx / w.L, h * (k2 + .28) / fl), at((sx + 1.4) / w.L, h * (k2 + .28) / fl), at((sx + 1.4) / w.L, h * (k2 + .72) / fl), at(sx / w.L, h * (k2 + .72) / fl)], winCol, '#223244', 0.8);
+          }
+        }
+      });
+    }
+    function roof3(a, h, col, type, rc) {
+      var zh = use3D ? h : 0, cm = cen(a);
+      if (type === 'quonset') {
+        for (var i = 0; i < 4; i++) {
+          var t = i / 4 * Math.PI / 2, sc2 = Math.cos(t), z = zh + (use3D ? Math.sin(t) * Math.max(1.2, h * 0.5) : 0);
+          poly(a.map(function (p) { return P3(cm.x + (p.x - cm.x) * sc2, cm.y + (p.y - cm.y) * sc2, z); }), shade(rc || col, 0.9 + i * 0.03), '#475569');
+        }
+        return;
+      }
+      if (type === 'pyramid' || type === 'red_tile') {
+        var ap = P3(cm.x, cm.y, zh + (use3D ? Math.max(1.4, h * 0.48) : 0)), es = [], red = type === 'red_tile';
+        for (var j = 0; j < a.length; j++) { var p = a[j], q = a[(j + 1) % a.length]; es.push({ p: p, q: q, d: P3((p.x + q.x) / 2, (p.y + q.y) / 2, 0)[2], i: j }); }
+        es.sort(function (u, v) { return v.d - u.d; });
+        es.forEach(function (e) {
+          poly([P3(e.p.x, e.p.y, zh), P3(e.q.x, e.q.y, zh), ap], red ? shade('#cf4b43', 0.84 + 0.06 * (e.i % 3)) : shade(rc || col, 0.9 + 0.04 * (e.i % 3)), '#333d47');
+        });
+        return;
+      }
+      poly(a.map(function (p) { return P3(p.x, p.y, zh); }), rc || shade(col, 1.04), '#2b3440');
+    }
+    function tree3(x, y) {
+      var rad = Math.max(2.6, 1.65 * s);
+      if (use3D) {
+        var sh = P3(x + 1.1, y - 0.9, 0);
+        c.beginPath(); c.arc(sh[0], sh[1], rad * 0.95, 0, 6.3); c.fillStyle = 'rgba(45,40,28,0.22)'; c.fill();
+        c.strokeStyle = '#5c4028'; c.lineWidth = Math.max(1.4, 0.26 * s); ln3(P3(x, y, 0), P3(x, y, 2.5));
+      }
+      var v = P3(x, y, use3D ? 2.6 : 0);
+      c.beginPath(); c.arc(v[0], v[1], rad * 0.95, 0, 6.3); c.fillStyle = '#476b2d'; c.fill(); c.strokeStyle = '#283d19'; c.lineWidth = 0.9; c.stroke();
+      c.beginPath(); c.arc(v[0] - rad * 0.22, v[1] - rad * 0.2, rad * 0.62, 0, 6.3); c.fillStyle = '#6a9344'; c.fill();
+    }
+
+    // 1. Compound sandy terrain
+    fs.forEach(function (f) {
+      if (f.category === 'fence' && f.geometryType === 'polygon') poly(featPts(f).map(T), '#f1dbb0');
     });
 
-    // 2. Ground layers: road, yard, field, olive_zone, playground, parking
-    fs.forEach(function (f) {
-      if (f.geometryType !== 'polygon') return;
-      var a = featPts(f), pts2 = a.map(T), cat = f.category;
+    // 2. Depth-sorted features (supports both 3D Isometric and 2D Plan cleanly)
+    var TIER = { yard: 0, road: 0, parking: 0, fence: 1, field: 1, playground: 1 };
+    var list = fs.map(function (f) {
+      return { f: f, t: f.geometryType === 'point' ? 3 : (TIER[f.category] === undefined ? 2 : TIER[f.category]), d: P3(f.center.x, f.center.y, 0)[2] };
+    });
+    list.sort(function (a, b) { return a.t - b.t || b.d - a.d; });
+
+    list.forEach(function (item) {
+      var f = item.f, cat = f.category;
+      if (f.geometryType === 'point') {
+        var pt = T(f.coordsMetric[0] || f.center);
+        if (cat === 'assembly') {
+          var rA = Math.max(10, 5.5 * s);
+          c.beginPath(); c.arc(pt[0], pt[1], rA, 0, 6.3); c.fillStyle = 'rgba(22,163,74,0.24)'; c.fill();
+          c.strokeStyle = '#15803d'; c.lineWidth = Math.max(2, 2.4 * uScale); c.stroke();
+          c.beginPath(); c.arc(pt[0], pt[1], Math.max(8, 10 * uScale), 0, 6.3); c.fillStyle = '#15803d'; c.fill();
+          c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.5, 2 * uScale); c.stroke();
+          c.fillStyle = '#ffffff'; c.font = 'bold ' + Math.round(11 * uScale) + 'px ' + MONO; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('A', pt[0], pt[1] + 0.5);
+        } else if (cat === 'vehicle') {
+          var r = (f.rotationDeg || 0) * D, cs = Math.cos(r), sn = Math.sin(r), p0 = f.coordsMetric[0] || f.center;
+          var box = [[-5, -1.25], [5, -1.25], [5, 1.25], [-5, 1.25]].map(function (q) { return { x: p0.x + q[0] * cs - q[1] * sn, y: p0.y + q[0] * sn + q[1] * cs }; });
+          shadow3(box, 2.9); ext3(box, 1.3, '#1e5aa8', 1, null, '#1b2838'); ext3(box, 2.9, '#eef2f6', 1, '#3b6d9c', '#1b2838'); roof3(box, 2.9, '#fff', 'flat', '#f8fafc');
+        } else if (cat === 'tree') {
+          tree3((f.coordsMetric[0] || f.center).x, (f.coordsMetric[0] || f.center).y);
+        } else if (cat === 'extinguisher') {
+          var pe = P3((f.coordsMetric[0] || f.center).x, (f.coordsMetric[0] || f.center).y, use3D ? 0.9 : 0);
+          var rE = Math.max(5, 7 * uScale);
+          c.beginPath(); c.arc(pe[0], pe[1], rE, 0, 6.3); c.fillStyle = '#dc2626'; c.fill();
+          c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.5, 1.8 * uScale); c.stroke();
+          c.fillStyle = '#ffffff'; c.font = 'bold ' + Math.round(8 * uScale) + 'px ' + MONO; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('F', pe[0], pe[1] + 0.5);
+        }
+        return;
+      }
+
+      var a = featPts(f), pts2 = a.map(T), h = +f.height_m || 0, fl = Math.max(1, f.floors | 0);
       if (cat === 'road') poly(pts2, '#d4d0c8', '#7a756c');
       else if (cat === 'yard') poly(pts2, '#e8d0a2', '#c0aa80');
       else if (cat === 'parking') poly(pts2, '#9ca3af', '#374151');
       else if (cat === 'playground') poly(pts2, '#e8ca8e', '#785a3a');
-      else if (cat === 'field') {
+      else if (cat === 'fence') {
+        var fh = use3D ? (h || 2.4) : 0;
+        if (use3D) ext3(a, 0.7, '#d1ccc2', 1, null, '#4b5563');
+        c.strokeStyle = '#4b5563'; c.lineWidth = Math.max(1.6, 2 * uScale);
+        poly(pts2, null, '#4b5563', Math.max(1.6, 2 * uScale));
+        if (fh > 0) {
+          poly(a.map(function (p) { return P3(p.x, p.y, fh); }), null, '#4b5563', 1.2);
+          a.forEach(function (p) { ln3(P3(p.x, p.y, 0), P3(p.x, p.y, fh)); });
+        }
+      } else if (cat === 'field') {
         poly(pts2, '#3fa335', '#ffffff', Math.max(1.5, 1.8 * uScale));
-        var th = domAng(a), cs = Math.cos(th), sn = Math.sin(th), mc = cen(a);
-        function F2W(lx, ly) { return { x: mc.x + lx * cs - ly * sn, y: mc.y + lx * sn + ly * cs }; }
-        var fb = bb(a.map(function (p) { var dx = p.x - mc.x, dy = p.y - mc.y; return { x: dx * cs + dy * sn, y: -dx * sn + dy * cs }; }));
+        var th = domAng(a), cs2 = Math.cos(th), sn2 = Math.sin(th), mc = cen(a);
+        function F2W(lx, ly) { return { x: mc.x + lx * cs2 - ly * sn2, y: mc.y + lx * sn2 + ly * cs2 }; }
+        var fb = bb(a.map(function (p) { var dx = p.x - mc.x, dy = p.y - mc.y; return { x: dx * cs2 + dy * sn2, y: -dx * sn2 + dy * cs2 }; }));
         var fw = fb.x1 - fb.x0, fd = fb.y1 - fb.y0, mx = (fb.x0 + fb.x1) / 2, my = (fb.y0 + fb.y1) / 2;
         c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.2, 1.5 * uScale);
-        var l1 = T(F2W(mx, fb.y0)), l2 = T(F2W(mx, fb.y1));
-        c.beginPath(); c.moveTo(l1[0], l1[1]); c.lineTo(l2[0], l2[1]); c.stroke();
-        var cr = Math.min(fw, fd) * 0.15;
-        c.beginPath();
-        for (var i = 0; i <= 32; i++) {
-          var rp = T(F2W(mx + cr * Math.cos(i / 32 * 6.2832), my + cr * Math.sin(i / 32 * 6.2832)));
-          i ? c.lineTo(rp[0], rp[1]) : c.moveTo(rp[0], rp[1]);
-        }
-        c.stroke();
+        ln3(P3(F2W(mx, fb.y0).x, F2W(mx, fb.y0).y, .02), P3(F2W(mx, fb.y1).x, F2W(mx, fb.y1).y, .02));
+        var cr = Math.min(fw, fd) * 0.15, ring = [];
+        for (var i = 0; i < 32; i++) { var rp = F2W(mx + cr * Math.cos(i / 32 * 6.2832), my + cr * Math.sin(i / 32 * 6.2832)); ring.push(P3(rp.x, rp.y, .02)); }
+        poly(ring, null, '#ffffff', Math.max(1.2, 1.4 * uScale));
       } else if (cat === 'olive_zone') {
         poly(pts2, '#ebd4a2', '#b09a70');
-        var ob = bb(a), cnt = Math.min(45, Math.max(5, (Math.abs(ob.x1 - ob.x0) * Math.abs(ob.y1 - ob.y0) / 55) | 0)), sd = hash(f.id), tr = [], tries = 0;
+        var ob = bb(a), cnt = Math.min(45, Math.max(5, (area(a) / 45) | 0)), sd = hash(f.id), tr = [], tries = 0;
         while (tr.length < cnt && tries++ < cnt * 15) {
           sd = (sd * 1664525 + 1013904223) >>> 0; var rx = ob.x0 + sd / 4294967296 * (ob.x1 - ob.x0);
           sd = (sd * 1664525 + 1013904223) >>> 0; var ry = ob.y0 + sd / 4294967296 * (ob.y1 - ob.y0);
-          if (inP(rx, ry, a)) tr.push({ x: rx, y: ry });
+          if (inP(rx, ry, a)) tr.push({ x: rx, y: ry, d: P3(rx, ry, 0)[2] });
         }
-        tr.forEach(function (t) {
-          var tp = T(t), rad = Math.max(3, 1.6 * s);
-          c.beginPath(); c.arc(tp[0] + rad * 0.25, tp[1] + rad * 0.25, rad, 0, 6.3); c.fillStyle = 'rgba(40,34,24,0.2)'; c.fill();
-          c.beginPath(); c.arc(tp[0], tp[1], rad, 0, 6.3); c.fillStyle = '#4e7532'; c.fill(); c.strokeStyle = '#283d19'; c.lineWidth = 0.8; c.stroke();
-          c.beginPath(); c.arc(tp[0] - rad * 0.2, tp[1] - rad * 0.2, rad * 0.55, 0, 6.3); c.fillStyle = '#6f9849'; c.fill();
-        });
-      }
-    });
-
-    // 3. Structures: buildings, medical, security, solar, hazards, cottages, tents, pool, gate
-    fs.forEach(function (f) {
-      if (f.geometryType !== 'polygon') return;
-      var a = featPts(f), pts2 = a.map(T), cat = f.category;
-      if (cat === 'fence' || cat === 'road' || cat === 'yard' || cat === 'field' || cat === 'olive_zone' || cat === 'parking' || cat === 'playground') return;
-      var shPts = a.map(function (p) { return T({ x: p.x + 1.4, y: p.y - 1.2 }); });
-      poly(shPts, 'rgba(35,30,22,0.22)');
-      if (cat === 'building') {
-        poly(pts2, '#cbd5e1', '#1e293b', Math.max(1.4, 1.8 * uScale));
-      } else if (cat === 'medical') {
-        poly(pts2, '#d4423e', '#1e293b', Math.max(1.4, 1.8 * uScale));
-        var cm = T(cen(a)), cr = Math.max(6, Math.min(18 * uScale, 2.2 * s));
-        c.beginPath(); c.arc(cm[0], cm[1], cr, 0, 6.3); c.fillStyle = '#ffffff'; c.fill();
-        c.beginPath(); c.arc(cm[0] - cr * 0.08, cm[1], cr * 0.65, 0, 6.3); c.fillStyle = '#d62828'; c.fill();
-        c.beginPath(); c.arc(cm[0] + cr * 0.22, cm[1], cr * 0.55, 0, 6.3); c.fillStyle = '#ffffff'; c.fill();
-      } else if (cat === 'security') {
-        poly(pts2, '#c9413b', '#1e293b', Math.max(1.3, 1.6 * uScale));
+        tr.sort(function (p, q) { return q.d - p.d; });
+        tr.forEach(function (t) { tree3(t.x, t.y); });
       } else if (cat === 'solar') {
-        poly(pts2, '#224a88', '#1e293b', Math.max(1.1, 1.4 * uScale));
+        var sb = bb(a), tp = a.map(function (p) { return P3(p.x, p.y, use3D ? (.5 + (p.y - sb.y0) / Math.max(1, sb.y1 - sb.y0) * 1.3) : 0); });
+        shadow3(a, 1.4);
+        if (use3D) { c.strokeStyle = '#475569'; a.forEach(function (p, j) { ln3(P3(p.x, p.y, 0), tp[j]); }); }
+        poly(tp, '#224a88', '#1e293b', Math.max(1.1, 1.4 * uScale));
       } else if (cat === 'pool') {
-        poly(pts2, '#38bdf8', '#0369a1', Math.max(1.4, 1.8 * uScale));
+        shadow3(a, h || 3); poly(pts2, '#38bdf8', '#0369a1', Math.max(1.4, 1.8 * uScale));
+        if (use3D) { c.save(); c.globalAlpha = 0.35; roof3(a, 1.8, '#e2f2fc', 'quonset', '#f0f9ff'); c.restore(); }
       } else if (cat === 'hazard' || cat === 'diesel_tank') {
-        poly(pts2, '#fca5a5', '#b91c1c', Math.max(1.6, 2 * uScale));
-      } else if (cat === 'cottage') {
-        poly(pts2, '#d49a62', '#5c3a1e', Math.max(1.2, 1.5 * uScale));
-      } else if (cat === 'tent') {
-        poly(pts2, '#ffffff', '#475569', Math.max(1.2, 1.5 * uScale));
+        var hh = h || 2.4; shadow3(a, hh); ext3(a, hh * 0.65, '#cbd2d9', 1, null, '#b91c1c'); roof3(a, hh * 0.65, '#eef2f6', 'quonset', '#f8fafc');
+      } else if ((cat === 'tent' || cat === 'cottage') && (f.renderMode || (area(f.coordsMetric) > 45 ? 'auto' : 'solid')) === 'auto') {
+        var cot = cat === 'cottage', u = cot ? 4 : 3.5, v = cot ? 3.2 : 3.5, px = u + (cot ? 1.8 : 1.4), py = v + (cot ? 2.2 : 1.4),
+          zth = domAng(a), zcs = Math.cos(zth), zsn = Math.sin(zth), zm = cen(a), us = [], zx, zy;
+        function L2W(lx, ly) { return { x: zm.x + lx * zcs - ly * zsn, y: zm.y + lx * zsn + ly * zcs }; }
+        var zb = bb(a.map(function (p) { var dx = p.x - zm.x, dy = p.y - zm.y; return { x: dx * zcs + dy * zsn, y: -dx * zsn + dy * zcs }; }));
+        poly(pts2, 'rgba(218,195,152,0.35)', 'rgba(130,115,90,0.45)');
+        for (zy = zb.y0 + v / 2 + .3; zy <= zb.y1 - v / 2 && us.length < 220; zy += py)
+          for (zx = zb.x0 + u / 2 + .3; zx <= zb.x1 - u / 2 && us.length < 220; zx += px) {
+            var cn = [[-u / 2, -v / 2], [u / 2, -v / 2], [u / 2, v / 2], [-u / 2, v / 2]].map(function (q) { return L2W(zx + q[0], zy + q[1]); });
+            if (cn.every(function (q) { return inP(q.x, q.y, a); })) { var cc = L2W(zx, zy); us.push({ cn: cn, d: P3(cc.x, cc.y, 0)[2] }); }
+          }
+        if (!us.length) {
+          var fu = Math.max(2.2, Math.min(u, (zb.x1 - zb.x0) * .6)), fv = Math.max(2.2, Math.min(v, (zb.y1 - zb.y0) * .6));
+          us.push({ cn: [[-fu / 2, -fv / 2], [fu / 2, -fv / 2], [fu / 2, fv / 2], [-fu / 2, fv / 2]].map(function (q) { return L2W(q[0], q[1]); }), d: P3(zm.x, zm.y, 0)[2] });
+        }
+        us.sort(function (p, q) { return q.d - p.d; });
+        us.forEach(function (o) {
+          shadow3(o.cn, cot ? 3 : 2.4);
+          if (cot) { ext3(o.cn, 2.1, '#c88d55', 1, null, '#3c2918'); roof3(o.cn, 2.1, '#b26e38', 'pyramid', '#b26e38'); }
+          else { ext3(o.cn, 1.2, '#f2f3f0', 1, null, '#475569'); roof3(o.cn, 1.2, '#ffffff', 'pyramid', '#ffffff'); }
+        });
+      } else if (cat === 'medical') {
+        shadow3(a, h); ext3(a, h, '#ede9e1', 1, '#5b8ec4', '#2b3440'); roof3(a, h, '#d4423e', 'red_tile');
+        var cm = cen(a), um = P3(cm.x, cm.y, use3D ? (h + Math.max(1.4, h * 0.48) * 0.55) : 0), mcr = Math.max(6, Math.min(18 * uScale, 2.2 * s));
+        c.beginPath(); c.arc(um[0], um[1], mcr, 0, 6.3); c.fillStyle = '#ffffff'; c.fill();
+        c.beginPath(); c.arc(um[0] - mcr * 0.08, um[1], mcr * 0.65, 0, 6.3); c.fillStyle = '#d62828'; c.fill();
+        c.beginPath(); c.arc(um[0] + mcr * 0.22, um[1], mcr * 0.55, 0, 6.3); c.fillStyle = '#ffffff'; c.fill();
+      } else if (cat === 'security') {
+        shadow3(a, h); ext3(a, h, '#dedbd4', 1, '#4f8ec9', '#2b3440'); roof3(a, h, '#c9413b', 'red_tile');
       } else if (cat === 'gate') {
-        poly(pts2, '#dc2626', '#1e293b', Math.max(1.5, 1.8 * uScale));
+        ext3(a, 1.4, '#dc2626', 1, null, '#1f2937'); roof3(a, 1.4, '#ffffff', 'flat', '#f8fafc');
       } else {
-        poly(pts2, '#e2e8f0', '#334155');
+        shadow3(a, h); ext3(a, h, '#cfd7df', fl, '#4b86c2', '#2b3440'); roof3(a, h, '#cfd7df', f.roofType || 'flat', '#dfe5ec');
       }
     });
 
-    // 4. Point features: Assembly Point, Bus, Extinguishers
-    fs.forEach(function (f) {
-      if (f.geometryType !== 'point') return;
-      var pt = T(f.coordsMetric[0] || f.center), cat = f.category;
-      if (cat === 'assembly') {
-        var rA = Math.max(10, 5.5 * s);
-        c.beginPath(); c.arc(pt[0], pt[1], rA, 0, 6.3); c.fillStyle = 'rgba(22,163,74,0.24)'; c.fill();
-        c.strokeStyle = '#15803d'; c.lineWidth = Math.max(2, 2.4 * uScale); c.stroke();
-        c.beginPath(); c.arc(pt[0], pt[1], Math.max(8, 10 * uScale), 0, 6.3); c.fillStyle = '#15803d'; c.fill();
-        c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.5, 2 * uScale); c.stroke();
-        c.fillStyle = '#ffffff'; c.font = 'bold ' + Math.round(11 * uScale) + 'px ' + MONO;
-        c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('A', pt[0], pt[1] + 0.5);
-      } else if (cat === 'vehicle') {
-        var bw = Math.max(12, 7 * s), bh = Math.max(6, 2.6 * s);
-        c.fillStyle = '#1e5aa8'; c.strokeStyle = '#0f172a'; c.lineWidth = Math.max(1.2, 1.5 * uScale);
-        c.fillRect(pt[0] - bw / 2, pt[1] - bh / 2, bw, bh); c.strokeRect(pt[0] - bw / 2, pt[1] - bh / 2, bw, bh);
-        c.fillStyle = '#ffffff'; c.fillRect(pt[0] - bw * 0.38, pt[1] - bh * 0.25, bw * 0.76, bh * 0.5);
-      } else if (cat === 'extinguisher') {
-        var rE = Math.max(5, 7 * uScale);
-        c.beginPath(); c.arc(pt[0], pt[1], rE, 0, 6.3); c.fillStyle = '#dc2626'; c.fill();
-        c.strokeStyle = '#ffffff'; c.lineWidth = Math.max(1.5, 1.8 * uScale); c.stroke();
-        c.fillStyle = '#ffffff'; c.font = 'bold ' + Math.round(8 * uScale) + 'px ' + MONO;
-        c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('F', pt[0], pt[1] + 0.5);
-      }
-    });
-
-    // 5. Context-aware Emergency Routes (Bold dark-cased lines + arrows)
+    // 3. Emergency Routes & Extinguisher Callout
     function drawRoutePoly(ptsArr, mainCol, casingCol, dash) {
       if (!ptsArr || ptsArr.length < 2) return;
-      var sp = ptsArr.map(T);
+      var sp = ptsArr.map(function (p) { return P3(p.x, p.y, use3D ? 0.55 : 0); });
       c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
-      // Dark outer casing for crisp print readability
       c.strokeStyle = casingCol; c.lineWidth = Math.max(5, 7.5 * uScale);
       if (dash) c.setLineDash(dash);
       c.beginPath(); sp.forEach(function (p, i) { i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); }); c.stroke();
-      // Main bright path
       c.strokeStyle = mainCol; c.lineWidth = Math.max(3, 4.6 * uScale);
       c.beginPath(); sp.forEach(function (p, i) { i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); }); c.stroke();
       c.setLineDash([]);
@@ -605,44 +671,40 @@ window.SOS = window.SOS || {};
     if (pin.showShelling && ctxRes.shellingPath) drawRoutePoly(ctxRes.shellingPath, '#2563eb', '#ffffff', [12 * uScale, 6 * uScale]);
     if (pin.showFire && ctxRes.firePath) drawRoutePoly(ctxRes.firePath, '#16a34a', '#ffffff', null);
 
-    // Nearest fire extinguisher callout
     if (ctxRes.nearestExt) {
-      var pPin = T({ x: pin.x, y: pin.y }), pExt = T(ctxRes.nearestExt);
-      c.save();
-      c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(1.5, 2 * uScale); c.setLineDash([5 * uScale, 4 * uScale]);
-      c.beginPath(); c.moveTo(pPin[0], pPin[1]); c.lineTo(pExt[0], pExt[1]); c.stroke(); c.setLineDash([]);
+      var pPin = P3(pin.x, pin.y, use3D ? 0.6 : 0), pExt = P3(ctxRes.nearestExt.x, ctxRes.nearestExt.y, use3D ? 0.6 : 0);
+      c.save(); c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(1.5, 2 * uScale); c.setLineDash([5 * uScale, 4 * uScale]);
+      ln3(pPin, pExt); c.setLineDash([]);
       c.beginPath(); c.arc(pExt[0], pExt[1], Math.max(9, 12 * uScale), 0, 6.3);
-      c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(2, 2.5 * uScale); c.stroke();
-      c.restore();
+      c.strokeStyle = '#dc2626'; c.lineWidth = Math.max(2, 2.5 * uScale); c.stroke(); c.restore();
     }
 
-    // 6. Bilingual collision-free feature labels
+    // 4. Collision-free bilingual labels
     var placed = [], lfs = Math.max(8, Math.round(10 * uScale)), lh = lfs + 6 * uScale;
-    var pPinS = T({ x: pin.x, y: pin.y });
+    var pPinS = P3(pin.x, pin.y, use3D ? 0.6 : 0);
     placed.push([pPinS[0] - 75 * uScale, pPinS[1] - 25 * uScale, 150 * uScale, 65 * uScale]);
     c.font = 'bold ' + lfs + 'px ' + SANS; c.textAlign = 'center'; c.textBaseline = 'middle';
     fs.forEach(function (f) {
       if (f.category === 'fence' || f.category === 'road' || f.category === 'yard' || f.category === 'extinguisher') return;
       var txt = f.ar_name || f.en_name; if (!txt) return;
-      var pt = T(f.geometryType === 'point' ? (f.coordsMetric[0] || f.center) : f.center);
+      var pt0 = f.geometryType === 'point' ? (f.coordsMetric[0] || f.center) : f.center;
+      var z = use3D ? (f.geometryType === 'point' ? 2.5 : (+f.height_m || 2)) : 0;
+      var pt = P3(pt0.x, pt0.y, z);
       var tw = c.measureText(txt).width + 10 * uScale;
-      var rx = pt[0] - tw / 2, ry = pt[1] - lh / 2;
+      var rx = pt[0] - tw / 2, ry = pt[1] - lh - 4 * uScale;
       if (rx < x0 + 4 || rx + tw > x0 + rw - 4 || ry < y0 + 4 || ry + lh > y0 + rh - 4) return;
       for (var i = 0; i < placed.length; i++) {
         var q = placed[i];
         if (rx - 3 < q[0] + q[2] && rx + tw + 3 > q[0] && ry - 3 < q[1] + q[3] && ry + lh + 3 > q[1]) return;
       }
       placed.push([rx, ry, tw, lh]);
-      c.fillStyle = 'rgba(255,255,255,0.9)'; c.fillRect(rx, ry, tw, lh);
+      c.fillStyle = 'rgba(255,255,255,0.92)'; c.fillRect(rx, ry, tw, lh);
       c.strokeStyle = '#64748b'; c.lineWidth = Math.max(0.8, 1 * uScale); c.strokeRect(rx, ry, tw, lh);
-      c.fillStyle = '#0f172a'; c.fillText(txt, pt[0], pt[1] + 0.5);
+      c.fillStyle = '#0f172a'; c.fillText(txt, pt[0], ry + lh / 2 + 0.5);
     });
 
-    // 7. YOU ARE HERE pin (facingScreenRad: 0 when headsUp, else pin.facingDeg*D)
-    var facingScreen = pin.headsUp ? 0 : (pin.facingDeg * D);
-    drawYouAreHere(c, pPinS[0], pPinS[1], uScale, facingScreen);
-
-    // 8. True North Compass & Metric Scale Bar inside map frame
+    // 5. YOU ARE HERE pin, Compass & Metric Scale
+    drawYouAreHere(c, pPinS[0], pPinS[1], uScale, pin.headsUp ? 0 : (pin.facingDeg * D));
     drawPrintCompass(c, x0 + rw - 38 * uScale, y0 + 38 * uScale, 26 * uScale, rotRad);
     var nice = [5, 10, 20, 50, 100].filter(function (v) { return v * s >= 55 * uScale; })[0] || 100;
     var spx = nice * s, sx0 = x0 + 18 * uScale, sy0 = y0 + rh - 18 * uScale;
@@ -682,11 +744,9 @@ window.SOS = window.SOS || {};
     function T(p) { var q = rotPt(p); return [ox + q.x * s, oy - q.y * s]; }
     var flData = (info.inter.floors && info.inter.floors[pin.floor]) || { rooms: [], walls: [], items: [] };
 
-    // Building floor slab
     c.beginPath(); info.loc.map(T).forEach(function (pt, i) { i ? c.lineTo(pt[0], pt[1]) : c.moveTo(pt[0], pt[1]); }); c.closePath();
     c.fillStyle = '#ffffff'; c.fill();
 
-    // Rooms
     (flData.rooms || []).forEach(function (rm) {
       var cs = [
         { x: rm.x - rm.w / 2, y: rm.y - rm.h / 2 }, { x: rm.x + rm.w / 2, y: rm.y - rm.h / 2 },
@@ -700,14 +760,12 @@ window.SOS = window.SOS || {};
       c.fillText(rm.ar_name || rm.en_name || '', mc[0], mc[1]);
     });
 
-    // Interior walls
     c.strokeStyle = '#334155'; c.lineWidth = Math.max(2, 0.16 * s); c.lineCap = 'round';
     (flData.walls || []).forEach(function (w) {
       var a = T({ x: w.x1, y: w.y1 }), b = T({ x: w.x2, y: w.y2 });
       c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
     });
 
-    // Items (Safe Havens, Exits, Stairs, Extinguishers, Furniture)
     (flData.items || []).forEach(function (it) {
       var pt = T(it), ang = -(it.rotationDeg || 0) * D - rotRad;
       c.save(); c.translate(pt[0], pt[1]); c.rotate(ang); c.scale(s, s);
@@ -731,11 +789,9 @@ window.SOS = window.SOS || {};
       c.restore();
     });
 
-    // Thick exterior perimeter walls
     c.beginPath(); info.loc.map(T).forEach(function (pt, i) { i ? c.lineTo(pt[0], pt[1]) : c.moveTo(pt[0], pt[1]); }); c.closePath();
     c.strokeStyle = '#0f172a'; c.lineWidth = Math.max(3, 0.28 * s); c.stroke();
 
-    // Fire / Shelling / Extinguisher guidance lines
     function guide(arr, col, dash) {
       if (!arr || arr.length < 2) return;
       var sp = arr.map(T);
@@ -779,12 +835,10 @@ window.SOS = window.SOS || {};
     var ctxRes = solvePinContext(pin);
     var rotRad = pin.headsUp ? (pin.facingDeg * D) : 0;
 
-    // White print sheet + border
     c.fillStyle = '#ffffff'; c.fillRect(0, 0, pw, ph);
     c.strokeStyle = '#0f172a'; c.lineWidth = Math.max(3, 5 * u);
     c.strokeRect(pad * 0.5, pad * 0.5, pw - pad, ph - pad);
 
-    // Top Bilingual Emergency Header
     c.fillStyle = '#0f172a'; c.fillRect(pad, pad, pw - pad * 2, hdrH);
     c.fillStyle = '#16a34a'; c.fillRect(pad, pad + hdrH - 7 * u, (pw - pad * 2) * 0.5, 7 * u);
     c.fillStyle = '#2563eb'; c.fillRect(pad + (pw - pad * 2) * 0.5, pad + hdrH - 7 * u, (pw - pad * 2) * 0.5, 7 * u);
@@ -800,7 +854,6 @@ window.SOS = window.SOS || {};
     c.textAlign = 'left'; c.fillText('LOCATION: ' + locSub, pad + 22 * u, pad + hdrH * 0.72);
     c.textAlign = 'right'; c.fillText('الموقع: ' + locSubAr, pw - pad - 22 * u, pad + hdrH * 0.72);
 
-    // Layout Split: Map Frame + Info/Legend/QR Sidebar
     var bodyY = pad + hdrH + 16 * u, bodyH = ph - bodyY - pad;
     var mapRect, sideRect;
     if (land) {
@@ -813,13 +866,11 @@ window.SOS = window.SOS || {};
       sideRect = { x: pad, y: mapRect.y + mapRect.h + 16 * u, w: pw - pad * 2, h: sideH };
     }
 
-    // Draw Daylight Print Map
     if (pin.scope === 'interior') drawInteriorDaylightMap(c, mapRect, pin, ctxRes, rotRad, null);
     else drawExteriorDaylightMap(c, mapRect, pin, ctxRes, rotRad, null);
     c.strokeStyle = '#334155'; c.lineWidth = Math.max(2, 2.5 * u);
     c.strokeRect(mapRect.x, mapRect.y, mapRect.w, mapRect.h);
 
-    // Sidebar / Bottom Info Panel
     c.fillStyle = '#f8fafc'; c.fillRect(sideRect.x, sideRect.y, sideRect.w, sideRect.h);
     c.strokeStyle = '#cbd5e1'; c.lineWidth = Math.max(1.5, 2 * u);
     c.strokeRect(sideRect.x, sideRect.y, sideRect.w, sideRect.h);
@@ -830,7 +881,6 @@ window.SOS = window.SOS || {};
 
     function drawActionBoxes(bx, by, bw) {
       var cy = by, boxH = 74 * u;
-      // Fire Box
       c.fillStyle = '#dcfce7'; c.fillRect(bx, cy, bw, boxH);
       c.strokeStyle = '#15803d'; c.lineWidth = Math.max(1.5, 2 * u); c.strokeRect(bx, cy, bw, boxH);
       c.fillStyle = '#14532d'; c.textAlign = 'right'; c.textBaseline = 'top';
@@ -843,7 +893,6 @@ window.SOS = window.SOS || {};
       c.fillText(fTxt, bx + 10 * u, cy + 52 * u);
       cy += boxH + 10 * u;
 
-      // Shelling Box
       c.fillStyle = '#dbeafe'; c.fillRect(bx, cy, bw, boxH);
       c.strokeStyle = '#1d4ed8'; c.lineWidth = Math.max(1.5, 2 * u); c.strokeRect(bx, cy, bw, boxH);
       c.fillStyle = '#1e3a8a'; c.textAlign = 'right'; c.textBaseline = 'top';
@@ -951,14 +1000,14 @@ window.SOS = window.SOS || {};
 
     var ctxRes = solvePinContext(pin);
     var rect = { x: 0, y: 0, w: W, h: H };
-    if (pin.scope === 'interior') drawInteriorDaylightMap(ctx, rect, pin, ctxRes, 0, view);
-    else drawExteriorDaylightMap(ctx, rect, pin, ctxRes, 0, view);
+    var placePin = Object.assign({}, pin, { view3D: false });
+    if (pin.scope === 'interior') drawInteriorDaylightMap(ctx, rect, placePin, ctxRes, 0, view);
+    else drawExteriorDaylightMap(ctx, rect, placePin, ctxRes, 0, view);
 
-    // Interactive HUD banner
     ctx.fillStyle = 'rgba(8,11,16,0.88)'; ctx.fillRect(10, 10, Math.min(W - 20, 520), 26);
     ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 1; ctx.strokeRect(10, 10, Math.min(W - 20, 520), 26);
     ctx.fillStyle = '#39ff14'; ctx.font = 'bold 11px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('CLICK TO PLACE "YOU ARE HERE" • RIGHT-DRAG/WHEEL TO PAN/ZOOM • FACING ' + Math.round(pin.facingDeg) + '°', 18, 23);
+    ctx.fillText('CLICK TO PLACE PIN • PREVIEW POSTER SHOWS FULL ' + (pin.view3D !== false ? '3D ISOMETRIC' : '2D PLAN'), 18, 23);
   }
 
   function exportPosterPng(pin) {
@@ -969,7 +1018,7 @@ window.SOS = window.SOS || {};
     var octx = off.getContext('2d');
     composePoster(octx, pw, ph, pin);
     var a = document.createElement('a');
-    a.download = 'SOS_Poster_' + (pin.locCode || pin.id).replace(/[^a-z0-9_-]+/gi, '_') + '_' + pin.paper + '_' + dpi + 'dpi.png';
+    a.download = 'SOS_Poster_' + (pin.locCode || pin.id).replace(/[^a-z0-9_-]+/gi, '_') + '_' + pin.paper + '_' + (pin.view3D !== false ? '3D_' : '2D_') + dpi + 'dpi.png';
     a.href = off.toDataURL('image/png');
     document.body.appendChild(a); a.click(); a.remove();
   }
@@ -979,9 +1028,7 @@ window.SOS = window.SOS || {};
     var pins = St.project.signagePins;
     if (!pins.length) return;
     if (pins.length > 1 && !confirm('Export ' + pins.length + ' poster PNG files now?')) return;
-    pins.forEach(function (p, i) {
-      setTimeout(function () { exportPosterPng(p); }, i * 450);
-    });
+    pins.forEach(function (p, i) { setTimeout(function () { exportPosterPng(p); }, i * 450); });
   }
 
   // =========================================================================
@@ -993,7 +1040,6 @@ window.SOS = window.SOS || {};
     ov.querySelector('#sgModePlace').className = mode === 'place' ? 'on' : '';
     ov.querySelector('#sgModePrev').className = mode === 'preview' ? 'cy' : '';
 
-    // Interior building options
     var blds = Object.keys(St.project.interiors || {}).map(function (id) {
       var f = (St.project.features || []).filter(function (x) { return x.id === id; })[0];
       return { id: id, name: f ? (f.en_name || f.id) : id, floors: f ? Math.max(1, f.floors | 0) : 1 };
@@ -1011,6 +1057,7 @@ window.SOS = window.SOS || {};
     fSel.innerHTML = fHtml;
 
     ov.querySelector('#sgScope').value = pin.scope;
+    ov.querySelector('#sgView3D').value = pin.view3D !== false ? '3d' : '2d';
     ov.querySelector('#sgIntBox').style.display = pin.scope === 'interior' ? '' : 'none';
     ov.querySelector('#sgLoc').value = pin.locCode || '';
     ov.querySelector('#sgEn').value = pin.en_name || '';
@@ -1027,11 +1074,10 @@ window.SOS = window.SOS || {};
     var fullUrl = buildQrUrl(pin);
     ov.querySelector('#sgQrPreview').textContent = fullUrl ? ('Encoded QR: ' + fullUrl) : 'QR URL not set yet (configure once IT provides MikroTik address).';
 
-    // Saved pins list
     var listEl = ov.querySelector('#sgPins');
     listEl.innerHTML = St.project.signagePins.map(function (p) {
       return '<div class="sgpin' + (p.id === pin.id ? ' sel' : '') + '" data-pid="' + esc(p.id) + '">' +
-        '<span>' + esc(p.en_name || p.locCode) + '</span><small>' + esc(p.scope === 'interior' ? ('F' + p.floor) : 'EXT') + '</small></div>';
+        '<span>' + esc(p.en_name || p.locCode) + '</span><small>' + esc(p.scope === 'interior' ? ('F' + p.floor) : (p.view3D !== false ? '3D' : '2D')) + '</small></div>';
     }).join('');
     [].forEach.call(listEl.querySelectorAll('[data-pid]'), function (el) {
       el.onclick = function () { activePinId = el.dataset.pid; syncUI(); fit(); draw(); };
@@ -1091,7 +1137,7 @@ window.SOS = window.SOS || {};
     ov = h('div', 'sg hide');
     ov.innerHTML =
       '<div class="sgtop">' +
-        '<b class="sgt">WALL SIGNAGE GENERATOR (A3/A4)</b>' +
+        '<b class="sgt">WALL SIGNAGE GENERATOR (A3/A4 3D/2D)</b>' +
         '<button id="sgModePlace" class="on">1. Place Pin</button>' +
         '<button id="sgModePrev">2. Poster Preview</button>' +
         '<button id="sgFit">Fit Map</button>' +
@@ -1102,8 +1148,9 @@ window.SOS = window.SOS || {};
       '</div>' +
       '<div class="sgbody">' +
         '<div class="sgside">' +
-          '<h4>Poster Scope &amp; Location</h4>' +
+          '<h4>Poster Scope &amp; View Mode</h4>' +
           '<label>Map Scope<select id="sgScope"><option value="exterior">Exterior Site Map</option><option value="interior">Building Interior Floor</option></select></label>' +
+          '<label>Poster Perspective<select id="sgView3D"><option value="3d">3D Isometric Coloured (Recommended)</option><option value="2d">2D Top-Down Architectural Plan</option></select></label>' +
           '<div id="sgIntBox"><label>Building<select id="sgBld"></select></label><label>Floor<select id="sgFlr"></select></label></div>' +
           '<label>Location Code (QR ?loc=)<input type="text" id="sgLoc" placeholder="e.g. office_f1"></label>' +
           '<label>EN Title<input type="text" id="sgEn"></label>' +
@@ -1127,7 +1174,6 @@ window.SOS = window.SOS || {};
           '<h4>Saved Wall Signage Pins</h4>' +
           '<div class="row"><button id="sgAddPin" class="on">+ New Pin</button><button id="sgDelPin" class="dng">Delete</button></div>' +
           '<div id="sgPins" style="display:flex;flex-direction:column;gap:5px"></div>' +
-          '<p class="mut">All pins &amp; QR Base URL save automatically inside your local .sos.json file (Plan B OPSEC).</p>' +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);
@@ -1141,7 +1187,8 @@ window.SOS = window.SOS || {};
     ov.querySelector('#sgBatch').onclick = batchExportAll;
     ov.querySelector('#sgClose').onclick = close;
 
-    ov.querySelector('#sgScope').onchange = function () { var v = this.value; upd(function (p) { p.scope = v; }); fit(); draw(); };
+    ov.querySelector('#sgScope').onchange = function () { var v = this.value; upd(function (p) { p.scope = v; if (v === 'interior') p.view3D = false; }); fit(); draw(); };
+    ov.querySelector('#sgView3D').onchange = function () { var v = this.value === '3d'; upd(function (p) { p.view3D = v; }); };
     ov.querySelector('#sgBld').onchange = function () { var v = this.value; upd(function (p) { p.featureId = v; p.floor = '1'; p.x = 0; p.y = 0; }); fit(); draw(); };
     ov.querySelector('#sgFlr').onchange = function () { var v = this.value; upd(function (p) { p.floor = v; }); };
     ov.querySelector('#sgLoc').onchange = function () { var v = this.value.trim(); upd(function (p) { p.locCode = v || p.id; }); };
