@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>AJ-GeoCAD Studio — 3D Architectural &amp; GIS CAD</title>
-<link rel="stylesheet" href="css/style.css?v=11">
+<link rel="stylesheet" href="css/style.css?v=12">
 <style id="aj-theme-css">
   /* PERMANENT CYBER HUD IDENTITY (Deep Navy / Petrol / Cyan-Green Gradient + Neon Bloom) */
   :root{
@@ -15,6 +15,8 @@
   body{background:var(--bg-deep)!important;color:var(--txt-main)!important;color-scheme:dark}
   #hud{background:linear-gradient(180deg,#0c1c30,#07111f)!important;border-bottom:1px solid var(--border-petrol)!important;box-shadow:0 2px 14px rgba(0,0,0,.45)}
   #hud h1{background:var(--grad-sig);-webkit-background-clip:text;background-clip:text;color:transparent!important;font-weight:800;letter-spacing:.8px;text-shadow:0 0 14px rgba(0,255,157,.28)}
+  #projName{width:142px;min-width:100px;max-width:24vw;padding:4px 7px;font-size:11px;font-weight:700;border-radius:4px;border-color:var(--border-hi)!important}
+  #projName:focus{border-color:var(--glow-green)!important;box-shadow:0 0 8px rgba(0,255,157,.22);outline:none}
   #left,#right{background:var(--bg-panel)!important;border-color:var(--border-petrol)!important}
   #st{background:#050c16!important;border-top:1px solid var(--border-petrol)!important;color:var(--txt-mut)!important}
   #left h3,#right h3{color:var(--txt-sub)!important;border-bottom-color:var(--border-petrol)!important;letter-spacing:.9px}
@@ -49,6 +51,7 @@
   body.ui-day #hud h1{background:linear-gradient(90deg,#0369a1,#15803d)!important;-webkit-background-clip:text!important;background-clip:text!important;text-shadow:none!important}
   body.ui-day #st{background:#e2e8f0!important;color:#334155!important}
   body.ui-day button,body.ui-day select,body.ui-day input,body.ui-day textarea{background:#ffffff!important;color:#0f172a!important;border-color:#cbd5e1!important;box-shadow:none!important}
+  body.ui-day #projName{border-color:#94a3b8!important}
   body.ui-day option{background:#ffffff!important;color:#0f172a!important}
   body.ui-day button:hover{border-color:#0369a1!important;background:#f0f9ff!important}
   body.ui-day button.on{background:#dcfce7!important;border-color:#15803d!important;color:#15803d!important;box-shadow:none!important}
@@ -85,6 +88,7 @@
   <span class="dv"></span>
   <button id="btnKml">Import KML</button>
   <button id="btnLoad">Load Project</button>
+  <input type="text" id="projName" value="Untitled Site" placeholder="Project / Site Name" title="Project / Site Name (used for .ajcad.json export)">
   <button id="btnSave">Save Project</button>
   <button id="btnClear" class="dng">Clear (OPSEC)</button>
   <span class="dv"></span>
@@ -191,14 +195,14 @@
 </div>
 <div id="st">AJ-GeoCAD Studio ready. Import a .kml or project JSON from your device.</div>
 
-<script src="js/state.js?v=11"></script>
-<script src="js/kmlParser.js?v=11"></script>
-<script src="js/engine.js?v=11"></script>
-<script src="js/interior.js?v=11"></script>
-<script src="js/routing.js?v=11"></script>
-<script src="js/signage.js?v=11"></script>
+<script src="js/state.js?v=12"></script>
+<script src="js/kmlParser.js?v=12"></script>
+<script src="js/engine.js?v=12"></script>
+<script src="js/interior.js?v=12"></script>
+<script src="js/routing.js?v=12"></script>
+<script src="js/signage.js?v=12"></script>
 <script src="js/exporter.js?v=12"></script>
-<script src="js/webgl3d.js?v=11"></script>
+<script src="js/webgl3d.js?v=12"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -280,6 +284,24 @@
   E.init($('c'));
   $('addType').innerHTML = ADD.map(function (a) { return '<option value="' + a[0] + '">' + a[1] + '</option>'; }).join('');
 
+  // Project / Site Name Sync (HUD input <-> St.project.meta.name & page title)
+  function syncProjName() {
+    var nm = (St.project.meta && St.project.meta.name) || 'Untitled Site';
+    if (document.activeElement !== $('projName')) $('projName').value = nm;
+    document.title = (nm && nm !== 'Untitled Site' ? (nm + ' — ') : '') + 'AJ-GeoCAD Studio';
+  }
+  $('projName').oninput = function () {
+    if (!St.project.meta) St.project.meta = {};
+    St.project.meta.name = this.value.trim() || 'Untitled Site';
+    document.title = (St.project.meta.name !== 'Untitled Site' ? (St.project.meta.name + ' — ') : '') + 'AJ-GeoCAD Studio';
+  };
+  $('projName').onchange = function () {
+    if (!St.project.meta) St.project.meta = {};
+    St.project.meta.name = this.value.trim() || 'Untitled Site';
+    this.value = St.project.meta.name;
+    St.emit('change');
+  };
+
   // Unified Studio + All Sub-Editors Daylight / Cyber HUD Switcher
   var uiMode = 'cyber';
   function applyUI(m, syncMap) {
@@ -317,7 +339,11 @@
     r.readAsText(f);
   });
   pick($('btnLoad'), $('fileSos'), function (f) { St.loadProjectJSON(f).then(function () { E.fitView(); }).catch(function (e) { alert('Load failed: ' + e.message); }); });
-  $('btnSave').onclick = function () { St.saveProjectJSON(); };
+  $('btnSave').onclick = function () {
+    if (!St.project.meta) St.project.meta = {};
+    St.project.meta.name = $('projName').value.trim() || 'Untitled Site';
+    St.saveProjectJSON();
+  };
   $('btnClear').onclick = function () { if (confirm('Wipe ALL workspace data, undo history and the saved browser draft?')) { St.clearWorkspace(); E.fitView(); } };
   $('btnNorth').onclick = function () { E.toggleNorthUp(); };
   $('btn2D').onclick = function () { E.toggleTop2D(); };
@@ -396,7 +422,7 @@
   });
   St.on('status', function (d) {
     var m = d.meta;
-    $('st').textContent = 'AJ-GeoCAD | X ' + d.x.toFixed(2) + ' m  Y ' + d.y.toFixed(2) + ' m | Area ' + Math.round(m.areaSqm || 0) + ' m2 | Perim ' + Math.round(m.perimeterM || 0) + ' m | Zoom ' + d.zoom.toFixed(2) + 'x | ' + (d.ortho ? 'ORTHO ' : '') + (d.osnap ? 'OSNAP ' : '') + (d.snap ? ('GRID ' + d.snap + 'm') : '');
+    $('st').textContent = 'AJ-GeoCAD | ' + (m.name || 'Untitled Site') + ' | X ' + d.x.toFixed(2) + ' m  Y ' + d.y.toFixed(2) + ' m | Area ' + Math.round(m.areaSqm || 0) + ' m2 | Perim ' + Math.round(m.perimeterM || 0) + ' m | Zoom ' + d.zoom.toFixed(2) + 'x | ' + (d.ortho ? 'ORTHO ' : '') + (d.osnap ? 'OSNAP ' : '') + (d.snap ? ('GRID ' + d.snap + 'm') : '');
   });
 
   function renderList() {
@@ -523,9 +549,9 @@
   $('fileIcon').onchange = function () {
     if (this.files[0]) E.attachIcon(this.files[0]).then(function () { renderInsp(E.getSelected()); }).catch(function (e) { alert('Icon failed: ' + e.message); });
   };
-  St.on('change', renderList);
+  St.on('change', function () { syncProjName(); renderList(); });
   St.on('select', function (f) { renderInsp(f); renderList(); });
-  renderInsp(null); renderList(); syncCadBtns();
+  syncProjName(); renderInsp(null); renderList(); syncCadBtns();
 
   document.addEventListener('keydown', function (e) {
     if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen()) || (S.WebGL3D && S.WebGL3D.isOpen())) return;
