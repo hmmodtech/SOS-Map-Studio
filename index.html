@@ -4,21 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>AJ-GeoCAD Studio — 3D Architectural &amp; GIS CAD</title>
-<link rel="stylesheet" href="css/style.css?v=10">
-<style>
+<link rel="stylesheet" href="css/style.css?v=11">
+<style id="aj-theme-css">
   /* PERMANENT CYBER HUD IDENTITY (Deep Navy / Petrol / Cyan-Green Gradient + Neon Bloom) */
   :root{
     --bg-deep:#060d18;--bg-panel:#0a1626;--bg-input:#040911;--border-petrol:#1b3b57;--border-hi:#265278;
     --glow-green:#00ff9d;--glow-cyan:#00e5ff;--grad-sig:linear-gradient(90deg,#00b4d8,#00ff9d);
     --txt-main:#d9ecff;--txt-mut:#7f9bb5;--txt-sub:#78b5a0;--danger:#ff4757;--amber:#f0c44d;
   }
-  body{background:var(--bg-deep)!important;color:var(--txt-main)!important}
+  body{background:var(--bg-deep)!important;color:var(--txt-main)!important;color-scheme:dark}
   #hud{background:linear-gradient(180deg,#0c1c30,#07111f)!important;border-bottom:1px solid var(--border-petrol)!important;box-shadow:0 2px 14px rgba(0,0,0,.45)}
   #hud h1{background:var(--grad-sig);-webkit-background-clip:text;background-clip:text;color:transparent!important;font-weight:800;letter-spacing:.8px;text-shadow:0 0 14px rgba(0,255,157,.28)}
   #left,#right{background:var(--bg-panel)!important;border-color:var(--border-petrol)!important}
   #st{background:#050c16!important;border-top:1px solid var(--border-petrol)!important;color:var(--txt-mut)!important}
   #left h3,#right h3{color:var(--txt-sub)!important;border-bottom-color:var(--border-petrol)!important;letter-spacing:.9px}
-  button,select,input{background:var(--bg-input)!important;color:var(--txt-main)!important;border:1px solid var(--border-petrol)!important;transition:border-color .15s,box-shadow .15s}
+  button,select,input,textarea{background:var(--bg-input)!important;color:var(--txt-main)!important;border:1px solid var(--border-petrol)!important;transition:border-color .15s,box-shadow .15s}
+  option{background:#07111f;color:#d9ecff}
   button:hover{border-color:var(--glow-cyan)!important;box-shadow:0 0 8px rgba(0,229,255,.22)}
   button.on{border-color:var(--glow-green)!important;color:var(--glow-green)!important;background:rgba(0,255,157,.11)!important;box-shadow:0 0 10px rgba(0,255,157,.22),inset 0 0 6px rgba(0,255,157,.08)}
   button.cy{border-color:var(--glow-cyan)!important;color:var(--glow-cyan)!important;background:rgba(0,229,255,.12)!important;box-shadow:0 0 10px rgba(0,229,255,.2)}
@@ -36,22 +37,45 @@
   .cad-inline button{flex-shrink:0}
   .cad-box{background:rgba(0,180,216,.06);border:1px solid var(--border-petrol);border-radius:5px;padding:6px;margin:4px 0;display:flex;flex-direction:column;gap:4px}
   .cad-box b{font-size:10px;color:var(--txt-sub);letter-spacing:.6px;text-transform:uppercase}
-
-  /* DAYLIGHT ARCHITECTURAL DESIGN UI MODE */
+</style>
+<style id="aj-day-css">
+  /* FULL DAYLIGHT DESIGN MODE — APPLIES TO STUDIO, DROPDOWNS, WEBGL 3D & ALL SUB-EDITOR MENUS */
   body.ui-day{
     --bg-deep:#eef3f8;--bg-panel:#f8fafc;--bg-input:#ffffff;--border-petrol:#cbd5e1;--border-hi:#94a3b8;
     --glow-green:#15803d;--glow-cyan:#0369a1;--txt-main:#0f172a;--txt-mut:#475569;--txt-sub:#0f766e;--danger:#dc2626;--amber:#b45309;
+    color-scheme:light;
   }
-  body.ui-day #hud{background:linear-gradient(180deg,#ffffff,#e9f0f7)!important;box-shadow:0 2px 8px rgba(15,23,42,.08)}
-  body.ui-day #hud h1{background:linear-gradient(90deg,#0369a1,#15803d);-webkit-background-clip:text;background-clip:text;text-shadow:none}
+  body.ui-day #hud{background:linear-gradient(180deg,#ffffff,#e9f0f7)!important;box-shadow:0 2px 8px rgba(15,23,42,.08)!important}
+  body.ui-day #hud h1{background:linear-gradient(90deg,#0369a1,#15803d)!important;-webkit-background-clip:text!important;background-clip:text!important;text-shadow:none!important}
   body.ui-day #st{background:#e2e8f0!important;color:#334155!important}
-  body.ui-day button.on{background:#dcfce7!important;box-shadow:none}
-  body.ui-day button.cy{background:#e0f2fe!important;box-shadow:none}
-  body.ui-day button.amb{background:#fef3c7!important}
-  body.ui-day .it{background:#ffffff!important}
-  body.ui-day .it.sel{background:#dcfce7!important;box-shadow:none}
-  body.ui-day .cad-stat{background:#f0f9ff;color:#0369a1;box-shadow:none}
-  body.ui-day .cad-box{background:#f1f5f9}
+  body.ui-day button,body.ui-day select,body.ui-day input,body.ui-day textarea{background:#ffffff!important;color:#0f172a!important;border-color:#cbd5e1!important;box-shadow:none!important}
+  body.ui-day option{background:#ffffff!important;color:#0f172a!important}
+  body.ui-day button:hover{border-color:#0369a1!important;background:#f0f9ff!important}
+  body.ui-day button.on{background:#dcfce7!important;border-color:#15803d!important;color:#15803d!important;box-shadow:none!important}
+  body.ui-day button.cy{background:#e0f2fe!important;border-color:#0369a1!important;color:#0369a1!important;box-shadow:none!important}
+  body.ui-day button.amb{background:#fef3c7!important;border-color:#b45309!important;color:#b45309!important}
+  body.ui-day button.dng{background:#fee2e2!important;border-color:#dc2626!important;color:#dc2626!important}
+  body.ui-day .it{background:#ffffff!important;color:#0f172a!important;border-color:#cbd5e1!important}
+  body.ui-day .it.sel{background:#dcfce7!important;border-color:#15803d!important;box-shadow:none!important}
+  body.ui-day .cad-stat{background:#f0f9ff!important;color:#0369a1!important;box-shadow:none!important}
+  body.ui-day .cad-box{background:#f1f5f9!important;border-color:#cbd5e1!important}
+
+  /* WebGL 3D GPU Cinema Menus in Daylight Mode */
+  body.ui-day .gl3d{background:#eef3f8!important;color:#0f172a!important}
+  body.ui-day .gltop{background:linear-gradient(180deg,#ffffff,#e9f0f7)!important;border-bottom:1px solid #cbd5e1!important}
+  body.ui-day .glt{background:linear-gradient(90deg,#0369a1,#15803d)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important}
+  body.ui-day .gl3d label{color:#334155!important}
+  body.ui-day #glHud{background:rgba(255,255,255,.94)!important;border-color:#94a3b8!important;color:#0f172a!important}
+  body.ui-day #glPad button{background:rgba(255,255,255,.94)!important;color:#0f172a!important;border-color:#94a3b8!important}
+
+  /* Auto-detected Daylight Chrome for All Sub-Editors (Interiors, Routing, Signage, Export) */
+  body.ui-day [data-aj-bg="deep"]{background:#eef3f8!important;color:#0f172a!important;border-color:#cbd5e1!important}
+  body.ui-day [data-aj-bg="panel"]{background:#f8fafc!important;color:#0f172a!important;border-color:#cbd5e1!important}
+  body.ui-day [data-aj-txt="dark"]{color:#0f172a!important}
+  body.ui-day [data-aj-txt="green"]{color:#15803d!important}
+  body.ui-day [data-aj-txt="cyan"]{color:#0369a1!important}
+  body.ui-day [data-aj-txt="amber"]{color:#b45309!important}
+  body.ui-day [data-aj-bd="1"]{border-color:#cbd5e1!important}
 </style>
 </head>
 <body>
@@ -64,7 +88,7 @@
   <button id="btnSave">Save Project</button>
   <button id="btnClear" class="dng">Clear (OPSEC)</button>
   <span class="dv"></span>
-  <button id="btnUI" class="cy" title="Switch Studio UI between Daylight and Midnight Cyber HUD">UI: Cyber HUD</button>
+  <button id="btnUI" class="cy" title="Switch ALL Studio &amp; Editor Menus between Daylight and Cyber HUD">&#9790; Cyber HUD</button>
   <button id="btnTheme">Map: Cyber</button>
   <button id="btnNorth">North Up</button>
   <button id="btn2D" title="Toggle flat 2D CAD Top drafting view vs 3D Perspective">View: 3D Iso</button>
@@ -167,14 +191,14 @@
 </div>
 <div id="st">AJ-GeoCAD Studio ready. Import a .kml or project JSON from your device.</div>
 
-<script src="js/state.js?v=10"></script>
-<script src="js/kmlParser.js?v=10"></script>
-<script src="js/engine.js?v=10"></script>
-<script src="js/interior.js?v=10"></script>
-<script src="js/routing.js?v=10"></script>
-<script src="js/signage.js?v=10"></script>
-<script src="js/exporter.js?v=10"></script>
-<script src="js/webgl3d.js?v=10"></script>
+<script src="js/state.js?v=11"></script>
+<script src="js/kmlParser.js?v=11"></script>
+<script src="js/engine.js?v=11"></script>
+<script src="js/interior.js?v=11"></script>
+<script src="js/routing.js?v=11"></script>
+<script src="js/signage.js?v=11"></script>
+<script src="js/exporter.js?v=11"></script>
+<script src="js/webgl3d.js?v=11"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -204,15 +228,71 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function pick(btn, file, fn) { btn.onclick = function () { file.value = ''; file.click(); }; file.onchange = function () { if (file.files[0]) fn(file.files[0]); }; }
 
+  // Automatic Daylight Chrome Tagger for ALL Sub-Editor Modals (Interiors, Routing, Signage, Export, WebGL)
+  var SKIP_TAG = { BUTTON: 1, INPUT: 1, SELECT: 1, OPTION: 1, TEXTAREA: 1, CANVAS: 1, SVG: 1, IMG: 1, STYLE: 1, SCRIPT: 1 };
+  function parseRgb(s) {
+    var m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/.exec(s || '');
+    return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null;
+  }
+  function tagDarkNode(el) {
+    if (!el || el.nodeType !== 1 || SKIP_TAG[el.tagName] || el.dataset.ajDone) return;
+    if (el.id === 'hud' || el.id === 'main' || el.id === 'st' || el.closest && (el.closest('#main') || el.closest('#hud'))) return;
+    var cs = getComputedStyle(el), bg = parseRgb(cs.backgroundColor), bgKind = null;
+    if (bg && bg[3] > 0.35 && bg[0] < 48 && bg[1] < 58 && bg[2] < 85) {
+      bgKind = (bg[0] + bg[1] + bg[2]) < 48 ? 'deep' : 'panel';
+      el.setAttribute('data-aj-bg', bgKind);
+    }
+    var isVividBg = bg && bg[3] > 0.35 && !bgKind && !(bg[0] > 215 && bg[1] > 215 && bg[2] > 215);
+    if (!isVividBg) {
+      var fg = parseRgb(cs.color);
+      if (fg && fg[3] > 0.4) {
+        if (fg[0] < 90 && fg[1] > 210 && fg[2] < 185) el.setAttribute('data-aj-txt', 'green');
+        else if (fg[0] < 60 && fg[1] > 190 && fg[2] > 215) el.setAttribute('data-aj-txt', 'cyan');
+        else if (fg[0] > 210 && fg[1] > 170 && fg[2] < 115) el.setAttribute('data-aj-txt', 'amber');
+        else if (fg[0] > 125 && fg[1] > 140 && fg[2] > 155) el.setAttribute('data-aj-txt', 'dark');
+      }
+    }
+    var bd = parseRgb(cs.borderTopColor);
+    if (bd && bd[3] > 0.3 && bd[0] < 65 && bd[1] < 85 && bd[2] < 115) el.setAttribute('data-aj-bd', '1');
+    el.dataset.ajDone = '1';
+  }
+  function scanModalTree(root) {
+    if (!root || root.nodeType !== 1) return;
+    var dayStyle = $('aj-day-css');
+    if (dayStyle && dayStyle.parentNode === document.head && document.head.lastElementChild !== dayStyle) document.head.appendChild(dayStyle);
+    tagDarkNode(root);
+    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (var i = 0; i < all.length; i++) tagDarkNode(all[i]);
+  }
+  if (window.MutationObserver) {
+    new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        for (var i = 0; i < m.addedNodes.length; i++) {
+          var nd = m.addedNodes[i];
+          if (nd.nodeType === 1 && nd.id !== 'main' && nd.id !== 'hud' && nd.id !== 'st' && (!nd.closest || (!nd.closest('#main') && !nd.closest('#hud')))) {
+            scanModalTree(nd);
+          }
+        }
+      });
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
   E.init($('c'));
   $('addType').innerHTML = ADD.map(function (a) { return '<option value="' + a[0] + '">' + a[1] + '</option>'; }).join('');
 
-  // Studio UI Theme Switcher (Midnight Cyber HUD vs Daylight Design Mode)
+  // Unified Studio + All Sub-Editors Daylight / Cyber HUD Switcher
   var uiMode = 'cyber';
   function applyUI(m, syncMap) {
     uiMode = m === 'day' ? 'day' : 'cyber';
+    var dayStyle = $('aj-day-css');
+    if (dayStyle && document.head.lastElementChild !== dayStyle) document.head.appendChild(dayStyle);
+    if (uiMode === 'day') {
+      [].forEach.call(document.body.children, function (ch) {
+        if (ch.nodeType === 1 && ch.tagName === 'DIV' && ch.id !== 'main' && ch.id !== 'st') scanModalTree(ch);
+      });
+    }
     document.body.classList.toggle('ui-day', uiMode === 'day');
-    $('btnUI').textContent = uiMode === 'day' ? 'UI: Daylight' : 'UI: Cyber HUD';
+    $('btnUI').innerHTML = uiMode === 'day' ? '&#9728; Daylight UI' : '&#9790; Cyber HUD';
     $('btnUI').className = uiMode === 'day' ? 'on' : 'cy';
     try { localStorage.setItem('aj_geocad_ui', uiMode); } catch (e) {}
     if (syncMap) {
@@ -352,7 +432,6 @@
       h += '<div class="row"><button id="bDup" class="cy">Duplicate (Ctrl+D)</button></div>';
     }
 
-    // Contextual 3D Architectural Style Controls
     if (f.geometryType === 'polygon' && ['building', 'medical', 'security', 'cottage'].indexOf(f.category) >= 0) {
       h += '<div class="cad-box"><b>3D Architectural Theme Preset</b><select id="bPreset">' +
         Object.keys(PRESETS).map(function (k) { return '<option value="' + k + '"' + (f.preset === k ? ' selected' : '') + '>' + esc(PRESETS[k].label) + '</option>'; }).join('') +
