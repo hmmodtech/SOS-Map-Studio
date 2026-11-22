@@ -1,7 +1,7 @@
 window.SOS = window.SOS || {};
 (function (S) {
   var St = S.State, D = Math.PI / 180, MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
-  var ov, cv, gl, prog, loc = {}, bufPos, bufNorm, bufCol, bufMat, vCount = 0, sCount = 0;
+  var ov, cv, gl, prog, loc = {}, bufPos, bufNorm, bufCol, bufMat, vCount = 0, sCount = 0, hasStencil = false, initErr = '';
   var isOpen = false, built = false, dirtyMesh = true, rafId = 0, lastT = 0;
   var mode = 'orbit', theme = 'print', sunHour = 14.2, zBoost = 1.15, showRoutes = true, intFloor = 0;
   var cam = { tx: 0, ty: 0, tz: 2, dist: 95, yaw: 20, pitch: 52 };
@@ -9,9 +9,9 @@ window.SOS = window.SOS || {};
   var keys = {}, drag = null, ptrs = {}, W = 1, H = 1, dpr = 1;
 
   // =========================================================================
-  // SHADERS (Procedural Architectural Materials + Sun Lighting + Real Shadows)
+  // SHADERS (Precision header injected identically into BOTH VS & FS!)
   // =========================================================================
-  var VS = [
+  var VS_BODY = [
     'attribute vec3 aPos;',
     'attribute vec3 aNorm;',
     'attribute vec3 aCol;',
@@ -36,8 +36,7 @@ window.SOS = window.SOS || {};
     '}'
   ].join('\n');
 
-  var FS = [
-    'precision mediump float;',
+  var FS_BODY = [
     'uniform vec3 uSunDir;',
     'uniform vec3 uCamPos;',
     'uniform vec3 uFogCol;',
@@ -77,7 +76,7 @@ window.SOS = window.SOS || {};
     '    float stripe = step(0.5, fract((vWPos.x + vWPos.y) * 0.14));',
     '    col *= 0.93 + 0.10 * stripe;',
     '  } else if(m == 4){',
-    '    float rib = 0.92 + 0.12 * sin((vWPos.x * 5.0 + vWPos.y * 5.0));',
+    '    float rib = 0.92 + 0.12 * sin(vWPos.x * 5.0 + vWPos.y * 5.0);',
     '    col *= rib;',
     '  } else if(m == 5){',
     '    vec2 g = abs(fract(vWPos.xy * 1.2) - 0.5);',
@@ -159,9 +158,10 @@ window.SOS = window.SOS || {};
   }
   function featPts(f) {
     var r = (f.rotationDeg || 0) * D, c = Math.cos(r), n = Math.sin(r), m = f.center || { x: 0, y: 0 };
-    return (f.coordsMetric || []).map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: m.x + dx * c - dy * n, y: m.y + dx * n + dy * c }; });
+    return (f.coordsMetric || []).filter(function (p) { return p && isFinite(p.x) && isFinite(p.y); })
+      .map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: m.x + dx * c - dy * n, y: m.y + dx * n + dy * c }; });
   }
-  function hash(s) { var v = 7; for (var i = 0; i < s.length; i++) v = (v * 31 + s.charCodeAt(i)) >>> 0; return v; }
+  function hash(s) { s = String(s || 'x'); var v = 7; for (var i = 0; i < s.length; i++) v = (v * 31 + s.charCodeAt(i)) >>> 0; return v; }
 
   // Ear-clipping triangulator for concave KML polygons
   function triangulate(pts) {
@@ -202,7 +202,10 @@ window.SOS = window.SOS || {};
     var dk = theme === 'cyber';
 
     function pushTri(toShadow, a, b, c, col, mat) {
-      var n = vNorm(vCross(vSub(b, a), vSub(c, a)));
+      var n = vCross(vSub(b, a), vSub(c, a));
+      var l = Math.hypot(n[0], n[1], n[2]);
+      if (l < 1e-7) return;
+      n = [n[0] / l, n[1] / l, n[2] / l];
       var P = toShadow ? sPos : gPos, N = toShadow ? sNorm : gNorm, C = toShadow ? sCol : gCol, M = toShadow ? sMat : gMat;
       P.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
       N.push(n[0], n[1], n[2], n[0], n[1], n[2], n[0], n[1], n[2]);
@@ -214,6 +217,7 @@ window.SOS = window.SOS || {};
       triangulate(pts).forEach(function (t) { pushTri(sh, [t[0].x, t[0].y, z], [t[1].x, t[1].y, z], [t[2].x, t[2].y, z], col, mat); });
     }
     function box3(sh, cx, cy, z0, w, d, h, ang, col, mat) {
+      if (w < 0.02 || d < 0.02 || h < 0.02) return;
       var cs = Math.cos(ang), sn = Math.sin(ang);
       var cn = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(function (q) { return { x: cx + q[0] * cs - q[1] * sn, y: cy + q[0] * sn + q[1] * cs }; });
       extrude3(sh, cn, z0, z0 + h, col, mat, true);
@@ -258,7 +262,7 @@ window.SOS = window.SOS || {};
     // 1. Wide Horizon Terrain Plane (non-shadow-casting ground)
     var fs = (St.project.features || []).filter(function (f) { return f.visible !== false; });
     var allPts = [];
-    fs.forEach(function (f) { allPts = allPts.concat(f.coordsMetric || []); });
+    fs.forEach(function (f) { allPts = allPts.concat(featPts(f)); });
     var gb = allPts.length ? bb(allPts) : { x0: -60, x1: 60, y0: -60, y1: 60 };
     var gPad = 240, gCol = dk ? hexRgb('#090d14') : hexRgb('#efe4cf');
     quad(false, [gb.x0 - gPad, gb.y0 - gPad, -0.04], [gb.x1 + gPad, gb.y0 - gPad, -0.04], [gb.x1 + gPad, gb.y1 + gPad, -0.04], [gb.x0 - gPad, gb.y1 + gPad, -0.04], gCol, 1);
@@ -267,7 +271,8 @@ window.SOS = window.SOS || {};
     fs.forEach(function (f) {
       var cat = f.category, h = Math.max(0.2, (+f.height_m || 2.5) * zBoost), fl = Math.max(1, f.floors | 0);
       if (f.geometryType === 'point') {
-        var p = f.coordsMetric[0] || f.center;
+        var p = (f.coordsMetric && f.coordsMetric[0]) || f.center;
+        if (!p || !isFinite(p.x) || !isFinite(p.y)) return;
         if (cat === 'assembly') {
           cylinder3(false, p.x, p.y, 0.05, 0.14, 5.8, 20, hexRgb('#16a34a'), 0);
           cylinder3(true, p.x, p.y, 0.14, 3.2 * zBoost, 0.18, 8, hexRgb('#ffffff'), 0);
@@ -290,9 +295,11 @@ window.SOS = window.SOS || {};
         flatPoly(false, a, 0.0, dk ? hexRgb('#101824') : hexRgb('#f1dbb0'), 1);
         var wallH = Math.min(1.1, h * 0.42);
         for (var i = 0; i < a.length; i++) {
-          var p0 = a[i], p1 = a[(i + 1) % a.length], L = Math.hypot(p1.x - p0.x, p1.y - p0.y), angF = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+          var p0 = a[i], p1 = a[(i + 1) % a.length], L = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+          if (L < 0.05) continue;
+          var angF = Math.atan2(p1.y - p0.y, p1.x - p0.x);
           box3(true, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2, 0, L, 0.32, wallH, angF, dk ? hexRgb('#1e2d3d') : hexRgb('#cfc9be'), 0);
-          var posts = Math.max(1, Math.round(L / 6));
+          var posts = Math.min(120, Math.max(1, Math.round(L / 6)));
           for (var k = 0; k < posts; k++) {
             var t = k / posts;
             box3(true, p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t, wallH, 0.14, 0.14, Math.max(0.5, h - wallH), 0, dk ? hexRgb('#39ff14') : hexRgb('#475569'), 0);
@@ -391,8 +398,8 @@ window.SOS = window.SOS || {};
           extrude3(true, a, 0, h, bCol, 2, true);
           if (cat === 'building' && (f.roofType || 'flat') === 'flat' && area(a) > 50) {
             for (var pi = 0; pi < a.length; pi++) {
-              var q0 = a[pi], q1 = a[(pi + 1) % a.length];
-              box3(true, (q0.x + q1.x) / 2, (q0.y + q1.y) / 2, h, Math.hypot(q1.x - q0.x, q1.y - q0.y), 0.35, 0.65 * zBoost, Math.atan2(q1.y - q0.y, q1.x - q0.x), dk ? hexRgb('#52687f') : hexRgb('#e2e8f0'), 0);
+              var q0 = a[pi], q1 = a[(pi + 1) % a.length], Lp = Math.hypot(q1.x - q0.x, q1.y - q0.y);
+              if (Lp > 0.05) box3(true, (q0.x + q1.x) / 2, (q0.y + q1.y) / 2, h, Lp, 0.35, 0.65 * zBoost, Math.atan2(q1.y - q0.y, q1.x - q0.x), dk ? hexRgb('#52687f') : hexRgb('#e2e8f0'), 0);
             }
             if (fl >= 2) {
               var thB = domAng(a), cB = Math.cos(thB), sB = Math.sin(thB), mB = cen(a);
@@ -442,111 +449,140 @@ window.SOS = window.SOS || {};
     dirtyMesh = false;
   }
 
+  function setHud(msg, isErr) {
+    var hud = ov && ov.querySelector('#glHud');
+    if (!hud) return;
+    hud.textContent = msg;
+    hud.style.color = isErr ? '#ff3c3c' : '#39ff14';
+    hud.style.borderColor = isErr ? '#ff3c3c' : '#1b2838';
+  }
+
   function initGL() {
-    gl = cv.getContext('webgl', { antialias: true, stencil: true, preserveDrawingBuffer: true });
-    if (!gl) { alert('WebGL is not supported on this device/browser.'); return false; }
-    function sh(type, src) {
-      var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; }
+    initErr = '';
+    gl = cv.getContext('webgl', { antialias: true, stencil: true, preserveDrawingBuffer: true }) ||
+         cv.getContext('webgl') || cv.getContext('experimental-webgl');
+    if (!gl) { initErr = 'WebGL not supported or hardware acceleration disabled in browser settings.'; setHud(initErr, true); return false; }
+    hasStencil = !!(gl.getContextAttributes && gl.getContextAttributes().stencil);
+
+    // Match float precision IDENTICALLY in both VS and FS (fixes ANGLE/Windows Chrome link error)
+    var fmtH = gl.getShaderPrecisionFormat && gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+    var prec = (fmtH && fmtH.precision > 0) ? 'precision highp float;\n' : 'precision mediump float;\n';
+
+    function sh(type, src, label) {
+      var s = gl.createShader(type); gl.shaderSource(s, prec + src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        initErr = label + ' shader error: ' + gl.getShaderInfoLog(s);
+        console.error(initErr); return null;
+      }
       return s;
     }
-    var vs = sh(gl.VERTEX_SHADER, VS), fs = sh(gl.FRAGMENT_SHADER, FS);
+    var vs = sh(gl.VERTEX_SHADER, VS_BODY, 'Vertex'), fs = sh(gl.FRAGMENT_SHADER, FS_BODY, 'Fragment');
+    if (!vs || !fs) { setHud(initErr, true); return false; }
+
     prog = gl.createProgram(); gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      initErr = 'Program link error: ' + gl.getProgramInfoLog(prog);
+      console.error(initErr); setHud(initErr, true); return false;
+    }
     gl.useProgram(prog);
-    ['aPos', 'aNorm', 'aCol', 'aMat'].forEach(function (k) { loc[k] = gl.getAttribLocation(prog, k); gl.enableVertexAttribArray(loc[k]); });
+    ['aPos', 'aNorm', 'aCol', 'aMat'].forEach(function (k) {
+      loc[k] = gl.getAttribLocation(prog, k);
+      if (loc[k] >= 0) gl.enableVertexAttribArray(loc[k]);
+    });
     ['uMVP', 'uSunDir', 'uCamPos', 'uFogCol', 'uDark', 'uShadowPass'].forEach(function (k) { loc[k] = gl.getUniformLocation(prog, k); });
     bufPos = gl.createBuffer(); bufNorm = gl.createBuffer(); bufCol = gl.createBuffer(); bufMat = gl.createBuffer();
     gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     return true;
   }
 
   function renderFrame(dt) {
-    if (!gl) return;
-    if (dirtyMesh) buildSceneMesh();
+    if (!gl || !prog || initErr) return;
+    try {
+      if (dirtyMesh) buildSceneMesh();
 
-    var spd = (keys.Shift ? 14 : 7) * dt;
-    if (mode === 'walk') {
-      var fYaw = fp.yaw * D, fx = Math.sin(fYaw), fy = Math.cos(fYaw), rx = Math.cos(fYaw), ry = -Math.sin(fYaw);
-      if (keys.KeyW || keys.ArrowUp) { fp.x += fx * spd; fp.y += fy * spd; }
-      if (keys.KeyS || keys.ArrowDown) { fp.x -= fx * spd; fp.y -= fy * spd; }
-      if (keys.KeyD || keys.ArrowRight) { fp.x += rx * spd; fp.y += ry * spd; }
-      if (keys.KeyA || keys.ArrowLeft) { fp.x -= rx * spd; fp.y -= ry * spd; }
-      if (keys.KeyQ) fp.yaw = (fp.yaw - 75 * dt + 360) % 360;
-      if (keys.KeyE) fp.yaw = (fp.yaw + 75 * dt) % 360;
-      if (keys.KeyR) fp.z = Math.min(25, fp.z + 4 * dt);
-      if (keys.KeyF) fp.z = Math.max(1.5, fp.z - 4 * dt);
-    } else {
-      var oYaw = cam.yaw * D, pSpd = cam.dist * 0.55 * dt;
-      var ox = Math.sin(oYaw), oy = Math.cos(oYaw), rrx = Math.cos(oYaw), rry = -Math.sin(oYaw);
-      if (keys.KeyW || keys.ArrowUp) { cam.tx -= ox * pSpd; cam.ty += oy * pSpd; }
-      if (keys.KeyS || keys.ArrowDown) { cam.tx += ox * pSpd; cam.ty -= oy * pSpd; }
-      if (keys.KeyD || keys.ArrowRight) { cam.tx += rrx * pSpd; cam.ty += rry * pSpd; }
-      if (keys.KeyA || keys.ArrowLeft) { cam.tx -= rrx * pSpd; cam.ty -= rry * pSpd; }
-      if (keys.KeyQ) cam.yaw = (cam.yaw - 65 * dt + 360) % 360;
-      if (keys.KeyE) cam.yaw = (cam.yaw + 65 * dt) % 360;
-    }
+      var spd = (keys.Shift ? 14 : 7) * dt;
+      if (mode === 'walk') {
+        var fYaw = fp.yaw * D, fx = Math.sin(fYaw), fy = Math.cos(fYaw), rx = Math.cos(fYaw), ry = -Math.sin(fYaw);
+        if (keys.KeyW || keys.ArrowUp) { fp.x += fx * spd; fp.y += fy * spd; }
+        if (keys.KeyS || keys.ArrowDown) { fp.x -= fx * spd; fp.y -= fy * spd; }
+        if (keys.KeyD || keys.ArrowRight) { fp.x += rx * spd; fp.y += ry * spd; }
+        if (keys.KeyA || keys.ArrowLeft) { fp.x -= rx * spd; fp.y -= ry * spd; }
+        if (keys.KeyQ) fp.yaw = (fp.yaw - 75 * dt + 360) % 360;
+        if (keys.KeyE) fp.yaw = (fp.yaw + 75 * dt) % 360;
+        if (keys.KeyR) fp.z = Math.min(25, fp.z + 4 * dt);
+        if (keys.KeyF) fp.z = Math.max(1.5, fp.z - 4 * dt);
+      } else {
+        var oYaw = cam.yaw * D, pSpd = cam.dist * 0.55 * dt;
+        var ox = Math.sin(oYaw), oy = Math.cos(oYaw), rrx = Math.cos(oYaw), rry = -Math.sin(oYaw);
+        if (keys.KeyW || keys.ArrowUp) { cam.tx -= ox * pSpd; cam.ty += oy * pSpd; }
+        if (keys.KeyS || keys.ArrowDown) { cam.tx += ox * pSpd; cam.ty -= oy * pSpd; }
+        if (keys.KeyD || keys.ArrowRight) { cam.tx += rrx * pSpd; cam.ty += rry * pSpd; }
+        if (keys.KeyA || keys.ArrowLeft) { cam.tx -= rrx * pSpd; cam.ty -= rry * pSpd; }
+        if (keys.KeyQ) cam.yaw = (cam.yaw - 65 * dt + 360) % 360;
+        if (keys.KeyE) cam.yaw = (cam.yaw + 65 * dt) % 360;
+      }
 
-    var sT = Math.max(0.05, Math.min(0.95, (sunHour - 6) / 12)) * Math.PI;
-    var sunDir = vNorm([Math.cos(sT), -0.45, Math.max(0.24, Math.sin(sT) * 1.15)]);
-    var dk = theme === 'cyber';
-    var fog = dk ? [0.03, 0.05, 0.08] : [0.85, 0.90, 0.96];
-    if (!dk && (sunHour < 8 || sunHour > 16.5)) fog = [0.95, 0.80, 0.68];
+      var sT = Math.max(0.05, Math.min(0.95, (sunHour - 6) / 12)) * Math.PI;
+      var sunDir = vNorm([Math.cos(sT), -0.45, Math.max(0.24, Math.sin(sT) * 1.15)]);
+      var dk = theme === 'cyber';
+      var fog = dk ? [0.03, 0.05, 0.08] : [0.85, 0.90, 0.96];
+      if (!dk && (sunHour < 8 || sunHour > 16.5)) fog = [0.95, 0.80, 0.68];
 
-    var eye, ctr;
-    if (mode === 'walk') {
-      var wy = fp.yaw * D, wp = fp.pitch * D;
-      eye = [fp.x, fp.y, fp.z];
-      ctr = [fp.x + Math.sin(wy) * Math.cos(wp), fp.y + Math.cos(wy) * Math.cos(wp), fp.z + Math.sin(wp)];
-    } else {
-      var ya = cam.yaw * D, el = (90 - cam.pitch) * D;
-      var horiz = cam.dist * Math.cos(el), vz = Math.max(1.2, cam.dist * Math.sin(el));
-      eye = [cam.tx + horiz * Math.sin(ya), cam.ty - horiz * Math.cos(ya), cam.tz + vz];
-      ctr = [cam.tx, cam.ty, cam.tz];
-    }
+      var eye, ctr;
+      if (mode === 'walk') {
+        var wy = fp.yaw * D, wp = fp.pitch * D;
+        eye = [fp.x, fp.y, fp.z];
+        ctr = [fp.x + Math.sin(wy) * Math.cos(wp), fp.y + Math.cos(wy) * Math.cos(wp), fp.z + Math.sin(wp)];
+      } else {
+        var ya = cam.yaw * D, el = (90 - cam.pitch) * D;
+        var horiz = cam.dist * Math.cos(el), vz = Math.max(1.2, cam.dist * Math.sin(el));
+        eye = [cam.tx + horiz * Math.sin(ya), cam.ty - horiz * Math.cos(ya), cam.tz + vz];
+        ctr = [cam.tx, cam.ty, cam.tz];
+      }
 
-    var proj = mPersp((mode === 'walk' ? 62 : 46) * D, W / Math.max(1, H), 0.35, 1400);
-    var mvp = mMul(proj, mLookAt(eye, ctr, [0, 0, 1]));
+      var proj = mPersp((mode === 'walk' ? 62 : 46) * D, W / Math.max(1, H), 0.35, 1400);
+      var mvp = mMul(proj, mLookAt(eye, ctr, [0, 0, 1]));
 
-    gl.viewport(0, 0, cv.width, cv.height);
-    gl.clearColor(fog[0], fog[1], fog[2], 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    gl.useProgram(prog);
+      gl.viewport(0, 0, cv.width, cv.height);
+      gl.clearColor(fog[0], fog[1], fog[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | (hasStencil ? gl.STENCIL_BUFFER_BIT : 0));
+      gl.useProgram(prog);
 
-    gl.uniformMatrix4fv(loc.uMVP, false, mvp);
-    gl.uniform3fv(loc.uSunDir, sunDir);
-    gl.uniform3fv(loc.uCamPos, eye);
-    gl.uniform3fv(loc.uFogCol, fog);
-    gl.uniform1f(loc.uDark, dk ? 1 : 0);
+      gl.uniformMatrix4fv(loc.uMVP, false, mvp);
+      gl.uniform3fv(loc.uSunDir, sunDir);
+      gl.uniform3fv(loc.uCamPos, eye);
+      gl.uniform3fv(loc.uFogCol, fog);
+      gl.uniform1f(loc.uDark, dk ? 1 : 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufNorm); gl.vertexAttribPointer(loc.aNorm, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.vertexAttribPointer(loc.aCol, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufMat); gl.vertexAttribPointer(loc.aMat, 1, gl.FLOAT, false, 0, 0);
+      if (loc.aPos >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bufPos); gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0); }
+      if (loc.aNorm >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bufNorm); gl.vertexAttribPointer(loc.aNorm, 3, gl.FLOAT, false, 0, 0); }
+      if (loc.aCol >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bufCol); gl.vertexAttribPointer(loc.aCol, 3, gl.FLOAT, false, 0, 0); }
+      if (loc.aMat >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bufMat); gl.vertexAttribPointer(loc.aMat, 1, gl.FLOAT, false, 0, 0); }
 
-    // Pass 1: Normal 3D World Geometry
-    gl.disable(gl.STENCIL_TEST);
-    gl.uniform1f(loc.uShadowPass, 0);
-    if (vCount > 0) gl.drawArrays(gl.TRIANGLES, 0, vCount);
-
-    // Pass 2: Real-Time Projected Sun Shadows (Stencil-guarded, single blend)
-    if (sCount > 0) {
-      gl.enable(gl.STENCIL_TEST);
-      gl.stencilFunc(gl.EQUAL, 0, 0xff);
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
-      gl.depthMask(false);
-      gl.uniform1f(loc.uShadowPass, 1);
-      gl.drawArrays(gl.TRIANGLES, vCount - sCount, sCount);
-      gl.depthMask(true);
       gl.disable(gl.STENCIL_TEST);
-    }
+      gl.uniform1f(loc.uShadowPass, 0);
+      if (vCount > 0) gl.drawArrays(gl.TRIANGLES, 0, vCount);
 
-    var hud = ov.querySelector('#glHud');
-    if (hud) {
-      hud.textContent = mode === 'walk'
+      if (sCount > 0 && hasStencil) {
+        gl.enable(gl.STENCIL_TEST);
+        gl.stencilFunc(gl.EQUAL, 0, 0xff);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
+        gl.depthMask(false);
+        gl.uniform1f(loc.uShadowPass, 1);
+        gl.drawArrays(gl.TRIANGLES, vCount - sCount, sCount);
+        gl.depthMask(true);
+        gl.disable(gl.STENCIL_TEST);
+      }
+
+      setHud(mode === 'walk'
         ? ('FIRST-PERSON WALK | Pos X ' + fp.x.toFixed(1) + ' Y ' + fp.y.toFixed(1) + ' Z ' + fp.z.toFixed(1) + 'm | WASD=Walk | Shift=Sprint | Drag=Look 360° | R/F=Height')
-        : ('WEBGL 3D GPU | Orbit ' + Math.round(cam.yaw) + '° | Tilt ' + Math.round(cam.pitch) + '° (up to 85° street-level) | Left-Drag=Orbit | Right/Shift-Drag=Pan | Wheel=Zoom');
+        : ('WEBGL 3D GPU | Orbit ' + Math.round(cam.yaw) + '° | Tilt ' + Math.round(cam.pitch) + '° | Tris ' + Math.round(vCount / 3) + ' | Left-Drag=Orbit | Right/Shift-Drag=Pan | Wheel=Zoom'), false);
+    } catch (err) {
+      console.error('WebGL3D error:', err);
+      setHud('WebGL3D Runtime Error: ' + (err && err.message ? err.message : String(err)), true);
     }
   }
 
@@ -559,7 +595,7 @@ window.SOS = window.SOS || {};
 
   function resetCamera() {
     var fs = St.project.features || [], all = [];
-    fs.forEach(function (f) { all = all.concat(f.coordsMetric || []); });
+    fs.forEach(function (f) { all = all.concat(featPts(f)); });
     var b = all.length ? bb(all) : { x0: -40, x1: 40, y0: -40, y1: 40 };
     var cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, span = Math.max(35, Math.hypot(b.x1 - b.x0, b.y1 - b.y0));
     cam.tx = cx; cam.ty = cy; cam.tz = 2; cam.dist = span * 0.95;
@@ -594,7 +630,7 @@ window.SOS = window.SOS || {};
       '.gl3d .sp{flex:1;min-width:6px}' +
       '.glstage{flex:1;position:relative;min-height:0;overflow:hidden}' +
       '#glCv{width:100%;height:100%;display:block;touch-action:none}' +
-      '#glHud{position:absolute;bottom:10px;left:10px;background:rgba(8,11,16,.84);border:1px solid #1b2838;border-radius:4px;padding:5px 9px;font-size:10px;color:#39ff14;pointer-events:none;max-width:calc(100% - 20px)}' +
+      '#glHud{position:absolute;bottom:10px;left:10px;background:rgba(8,11,16,.88);border:1px solid #1b2838;border-radius:4px;padding:5px 9px;font-size:10px;color:#39ff14;pointer-events:none;max-width:calc(100% - 20px)}' +
       '#glPad{position:absolute;bottom:44px;right:14px;display:none;grid-template-columns:repeat(3,40px);gap:4px}' +
       '#glPad.show{display:grid}#glPad button{height:40px;font-size:15px;font-weight:bold;background:rgba(14,20,29,.88)}';
     document.head.appendChild(st);
@@ -690,7 +726,7 @@ window.SOS = window.SOS || {};
       '</div>' +
       '<div class="glstage">' +
         '<canvas id="glCv"></canvas>' +
-        '<div id="glHud"></div>' +
+        '<div id="glHud">Initializing WebGL 3D GPU...</div>' +
         '<div id="glPad">' +
           '<span></span><button data-k="KeyW">&#8593;</button><span></span>' +
           '<button data-k="KeyA">&#8592;</button><button data-k="KeyS">&#8595;</button><button data-k="KeyD">&#8594;</button>' +
@@ -698,7 +734,6 @@ window.SOS = window.SOS || {};
       '</div>';
     document.body.appendChild(ov);
     cv = ov.querySelector('#glCv');
-    if (!initGL()) return;
     bind();
 
     ov.querySelector('#glOrbit').onclick = function () { mode = 'orbit'; syncUI(); };
@@ -727,11 +762,12 @@ window.SOS = window.SOS || {};
     if (!(St.project.features || []).length) { alert('Import KML or load .sos.json first.'); return; }
     if (S.Engine) { theme = S.Engine.getTheme(); zBoost = S.Engine.getZBoost(); }
     if (!built) build();
-    if (!gl) return;
     isOpen = true; dirtyMesh = true; keys = {}; ov.classList.remove('hide');
     ov.querySelector('#glBoost').value = zBoost;
     resize(); resetCamera(); syncUI();
+    if (!gl || !prog) initGL();
     document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
+    renderFrame(0);
     lastT = 0; rafId = requestAnimationFrame(loop);
   }
   function close() {
