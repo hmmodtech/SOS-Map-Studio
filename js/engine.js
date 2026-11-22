@@ -2,10 +2,8 @@ window.SOS = window.SOS || {};
 (function (S) {
   var St = S.State, D = Math.PI / 180, cv, ctx, W = 1, H = 1, dpr = 1, dirty = 1, hq = true, theme = 'cyber', tool = 'select', addType = 'building',
     sel = null, meas = [], hits = [], labels = [], mouse = { x: 0, y: 0 }, drag = null, ptrs = {}, icons = {};
-  var cam = { cx: 0, cy: 0, zoom: 1, base: 3, yaw: 0, pitch: 45, lastPitch: 45 };
+  var cam = { cx: 0, cy: 0, zoom: 1, base: 3, yaw: 0, pitch: 48, lastPitch: 48, persp: 0.45, zBoost: 1.25 };
   var layers = { fence: 1, build: 1, tent: 1, solar: 1, trees: 1, routes: 1, labels: 1, dims: 1, grid: 1 };
-
-  // AutoCAD Precision Drafting State
   var cad = { ortho: false, osnap: true, gridSnap: 0, drawPts: [], cmdBuf: '', snapHit: null, lastVClick: { t: 0, i: -1 }, lastDClick: { t: 0, x: 0, y: 0 } };
 
   var LAY = { fence: 'fence', building: 'build', medical: 'build', security: 'build', gate: 'build', assembly: 'build', vehicle: 'build', extinguisher: 'build',
@@ -36,13 +34,24 @@ window.SOS = window.SOS || {};
   function cl(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function sc() { return cam.base * cam.zoom; }
   function isPr() { return theme === 'print'; }
+  function zEff(z) { return (z || 0) * (cam.pitch < 2 ? 0 : cam.zBoost); }
+
+  // True 3D Perspective Projection + Exact Closed-Form Ground Inverse (z=0)
   function P(x, y, z) {
     var a = cam.yaw * D, t = cam.pitch * D, dx = x - cam.cx, dy = y - cam.cy, s = sc(),
-      rx = dx * Math.cos(a) - dy * Math.sin(a), ry = dx * Math.sin(a) + dy * Math.cos(a);
-    return [W / 2 + rx * s, H / 2 - ry * s * Math.cos(t) - (z || 0) * s * Math.sin(t), ry];
+      rx = dx * Math.cos(a) - dy * Math.sin(a), ry = dx * Math.sin(a) + dy * Math.cos(a),
+      zb = zEff(z), pf = cam.pitch < 2 ? 0 : cam.persp,
+      den = Math.max(0.28, 1 + pf * ((ry * Math.sin(t) - zb * Math.cos(t)) * s) / 950),
+      f = 1 / den;
+    return [W / 2 + rx * s * f, H / 2 - (ry * s * Math.cos(t) + zb * s * Math.sin(t)) * f, ry];
   }
   function inv(sx, sy) {
-    var a = cam.yaw * D, t = cam.pitch * D, s = sc(), rx = (sx - W / 2) / s, ry = -(sy - H / 2) / (s * Math.cos(t)), c = Math.cos(a), n = Math.sin(a);
+    var a = cam.yaw * D, t = cam.pitch * D, s = sc(), pf = cam.pitch < 2 ? 0 : cam.persp,
+      sxR = sx - W / 2, syR = -(sy - H / 2), alpha = pf * Math.sin(t) * s / 950,
+      den = s * Math.cos(t) - syR * alpha;
+    if (Math.abs(den) < 1e-4) den = den >= 0 ? 1e-4 : -1e-4;
+    var ry = syR / den, fac = Math.max(0.28, 1 + alpha * ry), rx = sxR * fac / s,
+      c = Math.cos(a), n = Math.sin(a);
     return { x: cam.cx + rx * c + ry * n, y: cam.cy - rx * n + ry * c };
   }
   function g0(p) { return P(p.x, p.y, 0); }
@@ -82,11 +91,7 @@ window.SOS = window.SOS || {};
   }
   function recalcMeta() {
     var fence = St.project.features.filter(function (f) { return f.category === 'fence' && f.geometryType === 'polygon' && f.coordsMetric.length >= 3; })[0];
-    if (fence) {
-      var a = pts(fence);
-      St.project.meta.areaSqm = area(a);
-      St.project.meta.perimeterM = perim(a);
-    }
+    if (fence) { var a = pts(fence); St.project.meta.areaSqm = area(a); St.project.meta.perimeterM = perim(a); }
   }
   function getSel() { return St.project.features.filter(function (f) { return f.id === sel; })[0] || null; }
   function icon(f) {
@@ -96,9 +101,7 @@ window.SOS = window.SOS || {};
     return i.complete && i.naturalWidth ? i : null;
   }
 
-  // =========================================================================
-  // AUTOCAD GEOMETRY ALGORITHMS (OSNAP, ORTHO, SQUARE 90, SIMPLIFY, OFFSET)
-  // =========================================================================
+  // AutoCAD Geometry Algorithms (ORTHO, OSNAP, Oriented Rect, Simplify, Offset)
   function orthoLock(anchor, w) {
     var a = cam.yaw * D, c = Math.cos(a), n = Math.sin(a), dx = w.x - anchor.x, dy = w.y - anchor.y;
     var rx = dx * c - dy * n, ry = dx * n + dy * c;
@@ -136,8 +139,7 @@ window.SOS = window.SOS || {};
     }
     if (cad.gridSnap > 0) {
       var g = cad.gridSnap;
-      out.x = Math.round(out.x / g) * g;
-      out.y = Math.round(out.y / g) * g;
+      out.x = Math.round(out.x / g) * g; out.y = Math.round(out.y / g) * g;
     }
     return out;
   }
@@ -202,13 +204,14 @@ window.SOS = window.SOS || {};
     return wasCW ? out.reverse() : out;
   }
 
-  // =========================================================================
-  // 3D / DAYLIGHT PRINT / CYBER RENDERING
-  // =========================================================================
+  // Architectural 3D Primitives (AO, Shadows, Doors, Rooftop Parapet/Solar/Tanks)
   function dropShadow(a, h) {
-    if (!isPr() || !(h > 0.2) || cam.pitch < 4) return;
-    var dx = h * 0.42, dy = -h * 0.34;
-    fillPoly(a.map(function (p) { return P(p.x + dx, p.y + dy, 0); }), 'rgba(40,34,24,0.22)');
+    if (cam.pitch < 3 || !(h > 0.2)) return;
+    var pr = isPr(), m = cen(a);
+    fillPoly(a.map(function (p) { return P(m.x + (p.x - m.x) * 1.045, m.y + (p.y - m.y) * 1.045, 0); }), pr ? 'rgba(30,24,16,0.26)' : 'rgba(0,0,0,0.42)');
+    if (!pr) return;
+    var eh = h * cam.zBoost;
+    fillPoly(a.map(function (p) { return P(p.x + eh * 0.44, p.y - eh * 0.36, 0); }), 'rgba(38,31,20,0.24)');
   }
   function drawCrescent(cx, cy, r) {
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.3); ctx.fillStyle = '#ffffff'; ctx.fill();
@@ -222,28 +225,84 @@ window.SOS = window.SOS || {};
   function extrude(a, h, col, fl, o) {
     if (cam.pitch < 2 || !(h > 0.05)) return;
     o = o || {};
-    var pr = isPr(), n = a.length, ws = [], i, k, wk = o.wk || (pr ? .92 : .5),
+    var pr = isPr(), n = a.length, ws = [], i, k, wk = o.wk || (pr ? 0.96 : 0.56),
       win = o.win === undefined ? (pr ? '#4f8ec9' : 'rgba(0,217,255,.5)') : o.win,
-      ink = o.edge || (pr ? '#2b3440' : shade(col, 1));
+      ink = o.edge || (pr ? '#232c36' : shade(col, 1)), maxL = 0, doorIdx = -1;
     function at(w, t, z) { return P(w.p.x + (w.q.x - w.p.x) * t, w.p.y + (w.q.y - w.p.y) * t, z); }
     for (i = 0; i < n; i++) {
-      var p = a[i], q = a[(i + 1) % n];
-      ws.push({ p: p, q: q, d: P((p.x + q.x) / 2, (p.y + q.y) / 2, 0)[2], L: Math.hypot(q.x - p.x, q.y - p.y), g: Math.atan2(q.y - p.y, q.x - p.x) + cam.yaw * D });
+      var p = a[i], q = a[(i + 1) % n], L = Math.hypot(q.x - p.x, q.y - p.y), ang = Math.atan2(q.y - p.y, q.x - p.x);
+      var sunDot = Math.cos(ang - (-38 * D));
+      var lightK = pr ? (0.72 + 0.34 * ((sunDot + 1) * 0.5)) : (0.7 + 0.32 * Math.abs(Math.sin(ang + cam.yaw * D)));
+      ws.push({ p: p, q: q, d: P((p.x + q.x) / 2, (p.y + q.y) / 2, 0)[2], L: L, lk: lightK, idx: i });
+      if (L > maxL) { maxL = L; doorIdx = i; }
     }
     ws.sort(function (u, v) { return v.d - u.d; });
     ws.forEach(function (w) {
-      fillPoly([at(w, 0, 0), at(w, 1, 0), at(w, 1, h), at(w, 0, h)], shade(col, wk * (.82 + .18 * Math.abs(Math.sin(w.g)))), ink);
+      fillPoly([at(w, 0, 0), at(w, 1, 0), at(w, 1, h), at(w, 0, h)], shade(col, wk * w.lk), ink);
+      if (pr && h >= 2.2) fillPoly([at(w, 0, 0), at(w, 1, 0), at(w, 1, 0.38), at(w, 0, 0.38)], shade(col, wk * w.lk * 0.76), null);
       ctx.strokeStyle = o.ln || (pr ? '#475569' : shade(col, .85));
       for (k = 1; k < fl; k++) line(at(w, 0, h * k / fl), at(w, 1, h * k / fl));
-      if (win && hq && w.L > 3 && sc() > 1.1)
-        for (k = 0; k < fl; k++) for (var s = 1; s < w.L - 2; s += 2.6)
-          fillPoly([at(w, s / w.L, h * (k + .28) / fl), at(w, (s + 1.4) / w.L, h * (k + .28) / fl), at(w, (s + 1.4) / w.L, h * (k + .72) / fl), at(w, s / w.L, h * (k + .72) / fl)], win, pr ? '#223244' : null);
+      if (win && hq && w.L > 3 && sc() > 1.05) {
+        for (k = 0; k < fl; k++) for (var s = 1; s < w.L - 2; s += 2.6) {
+          if (o.door && k === 0 && w.idx === doorIdx && Math.abs((s + 0.7) - w.L / 2) < 1.6) continue;
+          fillPoly([at(w, s / w.L, h * (k + .28) / fl), at(w, (s + 1.4) / w.L, h * (k + .28) / fl), at(w, (s + 1.4) / w.L, h * (k + .72) / fl), at(w, s / w.L, h * (k + .72) / fl)], win, pr ? '#1e293b' : null);
+        }
+      }
+      if (o.door && hq && w.idx === doorIdx && w.L >= 3.0 && sc() > 1.0) {
+        var dw = Math.min(2.2, Math.max(1.1, w.L * 0.16)), dh = Math.min(2.3, (h / fl) * 0.76);
+        var t0 = 0.5 - (dw / 2) / w.L, t1 = 0.5 + (dw / 2) / w.L;
+        fillPoly([at(w, t0, 0), at(w, t1, 0), at(w, t1, dh), at(w, t0, dh)], pr ? '#2c3a47' : '#0b2239', pr ? '#0f172a' : '#00d9ff');
+        if (dw >= 1.5) line(at(w, 0.5, 0), at(w, 0.5, dh));
+      }
       if (o.stripe) for (var s2 = 0, j = 0; s2 < w.L; s2++, j++) {
-        var t0 = s2 / w.L, t1 = Math.min(1, (s2 + 1) / w.L);
-        fillPoly([at(w, t0, h * .1), at(w, t1, h * .1), at(w, Math.min(1, t1 + .5 / w.L), h * .3), at(w, Math.min(1, t0 + .5 / w.L), h * .3)], j % 2 ? '#e8c84a' : '#ff3c3c');
+        var st0 = s2 / w.L, st1 = Math.min(1, (s2 + 1) / w.L);
+        fillPoly([at(w, st0, h * .1), at(w, st1, h * .1), at(w, Math.min(1, st1 + .5 / w.L), h * .3), at(w, Math.min(1, st0 + .5 / w.L), h * .3)], j % 2 ? '#e8c84a' : '#ff3c3c');
       }
     });
   }
+  function drawRooftopDetails(a, h, fl) {
+    if (cam.pitch < 4 || !hq || area(a) < 50) return;
+    var pr = isPr(), th = domAng(a), cs = Math.cos(th), sn = Math.sin(th), m = cen(a);
+    function L2W(lx, ly) { return { x: m.x + lx * cs - ly * sn, y: m.y + lx * sn + ly * cs }; }
+    var loc = a.map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: dx * cs + dy * sn, y: -dx * sn + dy * cs }; });
+    var b = bb(loc), rw = b.x1 - b.x0, rd = b.y1 - b.y0, ph = 0.65, inner = offsetPoly(a, -0.45);
+    if (inner.length === a.length && area(inner) > area(a) * 0.45) {
+      fillPoly(a.map(function (p) { return P(p.x, p.y, h + ph); }), pr ? '#e2e8f0' : '#4a6075', pr ? '#2b3440' : '#89a4be');
+      fillPoly(inner.map(function (p) { return P(p.x, p.y, h + 0.05); }), pr ? '#c4cdd6' : '#2d3d4e', pr ? '#64748b' : '#52687f');
+      for (var i = 0; i < a.length; i++) {
+        var q = a[(i + 1) % a.length];
+        fillPoly([P(a[i].x, a[i].y, h), P(q.x, q.y, h), P(q.x, q.y, h + ph), P(a[i].x, a[i].y, h + ph)], pr ? '#d5dde5' : '#3d5166', pr ? '#2b3440' : '#6f8aa5');
+      }
+    }
+    if (fl >= 2 && rw > 8 && rd > 6) {
+      var pw = Math.min(4.8, rw * 0.34), pd = Math.min(3.4, rd * 0.46), gap = 0.9;
+      [-pw / 2 - gap / 2, pw / 2 + gap / 2].forEach(function (ox) {
+        var sp = [[ox - pw / 2, -pd / 2], [ox + pw / 2, -pd / 2], [ox + pw / 2, pd / 2], [ox - pw / 2, pd / 2]].map(function (q) { return L2W(q[0], q[1]); });
+        if (sp.every(function (q) { return inP(q.x, q.y, a); })) {
+          var ptsS = [P(sp[0].x, sp[0].y, h + 0.2), P(sp[1].x, sp[1].y, h + 0.2), P(sp[2].x, sp[2].y, h + 0.95), P(sp[3].x, sp[3].y, h + 0.95)];
+          fillPoly(ptsS, pr ? '#1e4682' : '#10285f', pr ? '#0f172a' : '#3a7bff');
+          ctx.strokeStyle = 'rgba(147,197,253,0.6)'; ctx.lineWidth = 0.8;
+          for (var g = 1; g <= 2; g++) {
+            var k = g / 3;
+            line([ptsS[0][0] + (ptsS[1][0] - ptsS[0][0]) * k, ptsS[0][1] + (ptsS[1][1] - ptsS[0][1]) * k], [ptsS[3][0] + (ptsS[2][0] - ptsS[3][0]) * k, ptsS[3][1] + (ptsS[2][1] - ptsS[3][1]) * k]);
+          }
+          line([(ptsS[0][0] + ptsS[3][0]) / 2, (ptsS[0][1] + ptsS[3][1]) / 2], [(ptsS[1][0] + ptsS[2][0]) / 2, (ptsS[1][1] + ptsS[2][1]) / 2]);
+        }
+      });
+      var tx0 = b.x1 - 1.9, ty0 = b.y1 - 1.7;
+      [[tx0, ty0], [tx0 - 1.5, ty0]].forEach(function (tk) {
+        var wp = L2W(tk[0], tk[1]);
+        if (!inP(wp.x, wp.y, a)) return;
+        var b0 = P(wp.x, wp.y, h + 0.1), t0 = P(wp.x, wp.y, h + 1.45), rad = Math.max(2.5, 0.55 * sc());
+        ctx.fillStyle = pr ? '#cfd6de' : '#64748b'; ctx.strokeStyle = pr ? '#334155' : '#94a3b8'; ctx.lineWidth = 1;
+        ctx.fillRect(t0[0] - rad, t0[1], rad * 2, Math.max(2, b0[1] - t0[1]));
+        ctx.strokeRect(t0[0] - rad, t0[1], rad * 2, Math.max(2, b0[1] - t0[1]));
+        ctx.beginPath(); ctx.ellipse(t0[0], t0[1], rad, rad * 0.48, 0, 0, 6.3);
+        ctx.fillStyle = pr ? '#f8fafc' : '#94a3b8'; ctx.fill(); ctx.stroke();
+      });
+    }
+  }
+  // Feature Renderers & CAD Overlays
   function roof(a, h, col, type, rc) {
     var pr = isPr(), c = cen(a), n = a.length, i, zh = cam.pitch < 2 ? 0 : h;
     if (type === 'quonset') {
@@ -258,7 +317,7 @@ window.SOS = window.SOS || {};
       for (i = 0; i < n; i++) { var p = a[i], q = a[(i + 1) % n]; es.push({ p: p, q: q, d: P((p.x + q.x) / 2, (p.y + q.y) / 2, 0)[2], i: i }); }
       es.sort(function (u, v) { return v.d - u.d; });
       es.forEach(function (e) {
-        var fc = red ? shade(pr ? '#cf4b43' : '#c0502d', .82 + .07 * (e.i % 3)) : shade(rc || col, pr ? (.9 + .04 * (e.i % 3)) : (.7 + .1 * (e.i % 3)));
+        var fc = red ? shade(pr ? '#cf4b43' : '#c0502d', .8 + .09 * (e.i % 3)) : shade(rc || col, pr ? (.88 + .05 * (e.i % 3)) : (.7 + .1 * (e.i % 3)));
         fillPoly([P(e.p.x, e.p.y, zh), P(e.q.x, e.q.y, zh), ap], fc, pr ? '#333d47' : (red ? '#ff8a5c' : col));
       });
       return;
@@ -278,9 +337,9 @@ window.SOS = window.SOS || {};
     var pr = isPr(), s = sc(), r = Math.max(2.5, (radM || 1.7) * s);
     if (pr) {
       if (cam.pitch >= 4) {
-        var sh = P(x + 1.1, y - 0.9, 0);
-        ctx.beginPath(); ctx.arc(sh[0], sh[1], r * .95, 0, 6.3); ctx.fillStyle = 'rgba(45,40,28,0.22)'; ctx.fill();
-        var u0 = P(x, y, 0), v0 = P(x, y, 1.8); ctx.strokeStyle = '#5c4028'; ctx.lineWidth = Math.max(1.5, .28 * s); line(u0, v0);
+        var sh = P(x + 1.2 * cam.zBoost, y - 0.9 * cam.zBoost, 0);
+        ctx.beginPath(); ctx.arc(sh[0], sh[1], r * .95, 0, 6.3); ctx.fillStyle = 'rgba(42,35,24,0.24)'; ctx.fill();
+        var u0 = P(x, y, 0), v0 = P(x, y, 1.9); ctx.strokeStyle = '#5c4028'; ctx.lineWidth = Math.max(1.5, .28 * s); line(u0, v0);
       }
       var zt = cam.pitch < 2 ? 0 : 2.7;
       var t0 = P(x, y, zt), t1 = P(x - .55, y + .3, zt + .2), t2 = P(x + .5, y - .2, zt + .3);
@@ -317,12 +376,9 @@ window.SOS = window.SOS || {};
         extrude(box, 1.3, '#1e5aa8', 1, { wk: 1, edge: '#1b2838', win: null });
         extrude(box, 2.9, '#eef2f6', 1, { wk: .96, edge: '#1b2838', win: '#3b6d9c' });
         roof(box, 2.9, '#ffffff', 'flat', '#f8fafc');
-      } else {
-        extrude(box, 3, c, 1); roof(box, 3, c, 'flat');
-      }
-    } else if (cat === 'tree') {
-      drawTreeAt(p.x, p.y, c, 1.8);
-    } else if (cat === 'extinguisher') {
+      } else { extrude(box, 3, c, 1); roof(box, 3, c, 'flat'); }
+    } else if (cat === 'tree') drawTreeAt(p.x, p.y, c, 1.8);
+    else if (cat === 'extinguisher') {
       u = P(p.x, p.y, 0); v = P(p.x, p.y, cam.pitch < 2 ? 0 : .9); ctx.lineCap = 'round'; ctx.lineWidth = Math.max(4, .4 * s); ctx.strokeStyle = '#dc2626'; line(u, v); ctx.lineCap = 'butt'; ctx.lineWidth = 1.3;
     } else if (cat === 'camera') {
       u = P(p.x, p.y, 0); v = P(p.x, p.y, cam.pitch < 2 ? 0 : 3.2); ctx.strokeStyle = pr ? '#475569' : '#8899aa'; line(u, v); ctx.fillStyle = pr ? '#1e293b' : c; ctx.fillRect(v[0] - 6, v[1] - 4, 12, 8);
@@ -346,8 +402,8 @@ window.SOS = window.SOS || {};
     var fs = [
       { v: [[cn[0], zh], [cn[1], zh], [r1, z], [r0, z]], c: roofA || '#b4502e' },
       { v: [[cn[3], zh], [cn[2], zh], [r1, z], [r0, z]], c: roofB || '#8e3d22' },
-      { v: [[cn[0], zh], [cn[3], zh], [r0, z]], c: shade(c, .78) },
-      { v: [[cn[1], zh], [cn[2], zh], [r1, z]], c: shade(c, .88) }
+      { v: [[cn[0], zh], [cn[3], zh], [r0, z]], c: shade(c, .76) },
+      { v: [[cn[1], zh], [cn[2], zh], [r1, z]], c: shade(c, .9) }
     ];
     fs.forEach(function (f) { f.p = f.v.map(function (e) { return P(e[0].x, e[0].y, e[1]); }); f.d = f.p.reduce(function (s, q) { return s + q[2]; }, 0) / f.p.length; });
     fs.sort(function (u, v) { return v.d - u.d; });
@@ -379,7 +435,7 @@ window.SOS = window.SOS || {};
       dropShadow(o.cn, cot ? 3.0 : 2.4);
       if (cot) {
         var wc = pr ? '#c88d55' : c;
-        extrude(o.cn, 2.1, wc, 1, { wk: .95, edge: pr ? '#3c2918' : null, win: pr ? '#3c4d5e' : 'rgba(255,255,255,.22)' });
+        extrude(o.cn, 2.1, wc, 1, { wk: .95, edge: pr ? '#3c2918' : null, win: pr ? '#3c4d5e' : 'rgba(255,255,255,.22)', door: true });
         gable(o.cn, 2.1, .9, wc, pr ? '#b26e38' : '#b4502e', pr ? '#8e5325' : '#8e3d22', pr ? '#3c2918' : '#ff8a5c');
       } else {
         var tc = pr ? '#f2f3f0' : c;
@@ -466,13 +522,22 @@ window.SOS = window.SOS || {};
     else if (cat === 'playground') drawPlayground(a);
     else if (cat === 'pool') drawPool(a, h || 3.2);
     else if (cat === 'fence') {
-      var fh = cam.pitch < 2 ? 0 : (h || 2.4), n = a.length;
-      ctx.strokeStyle = pr ? '#4b5563' : c; ctx.lineWidth = pr ? 1.4 : 1.2;
-      if (pr && fh > 0) extrude(a, 0.7, '#d1ccc2', 1, { wk: .95, edge: '#4b5563', win: null });
+      var fh = cam.pitch < 2 ? 0 : (h || 2.5), n = a.length;
+      ctx.strokeStyle = pr ? '#475569' : c; ctx.lineWidth = pr ? 1.4 : 1.2;
+      if (pr && fh > 0) {
+        var wallH = Math.min(1.0, fh * 0.42), innerF = offsetPoly(a, -0.35);
+        extrude(a, wallH, '#cfc9be', 1, { wk: .95, edge: '#475569', win: null });
+        if (innerF.length === a.length) {
+          for (i = 0; i < n; i++) {
+            var q1 = a[(i + 1) % n], iq0 = innerF[i], iq1 = innerF[(i + 1) % n];
+            fillPoly([P(a[i].x, a[i].y, wallH), P(q1.x, q1.y, wallH), P(iq1.x, iq1.y, wallH), P(iq0.x, iq0.y, wallH)], '#e3dfd7', '#64748b');
+          }
+        }
+      }
       path(a.map(g0), 1); ctx.stroke();
       if (fh > 0) {
         path(a.map(function (p) { return P(p.x, p.y, fh); }), 1); ctx.stroke();
-        ctx.globalAlpha = .45; path(a.map(function (p) { return P(p.x, p.y, fh * .65); }), 1); ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.globalAlpha = .45; path(a.map(function (p) { return P(p.x, p.y, fh * .7); }), 1); ctx.stroke(); ctx.globalAlpha = 1;
         for (i = 0; i < n; i++) {
           var p = a[i], q = a[(i + 1) % n], m = Math.min(400, Math.max(1, Math.round(Math.hypot(q.x - p.x, q.y - p.y) / 6)));
           for (k = 0; k < m; k++) { var t = k / m, x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t; line(P(x, y, 0), P(x, y, fh)); }
@@ -535,12 +600,12 @@ window.SOS = window.SOS || {};
       var bld = cat === 'building', wh = cat === 'tent' ? h * .45 : h;
       dropShadow(a, wh);
       if (pr && cat === 'medical') {
-        extrude(a, wh, '#ede9e1', 1, { wk: .96, edge: '#2b3440', win: '#5b8ec4' });
+        extrude(a, wh, '#ede9e1', 1, { wk: .96, edge: '#2b3440', win: '#5b8ec4', door: true });
         roof(a, wh, '#d4423e', 'red_tile');
         var cm = cen(a), um = P(cm.x, cm.y, cam.pitch < 2 ? 0 : (wh + Math.max(1.4, wh * .48) * .55));
         drawCrescent(um[0], um[1], Math.max(6, cl(sc() * 2.2, 6, 16)));
       } else if (pr && cat === 'security') {
-        extrude(a, wh, '#dedbd4', 1, { wk: .96, edge: '#2b3440', win: '#4f8ec9' });
+        extrude(a, wh, '#dedbd4', 1, { wk: .96, edge: '#2b3440', win: '#4f8ec9', door: true });
         roof(a, wh, '#c9413b', 'red_tile');
       } else if (pr && cat === 'gate') {
         extrude(a, 1.4, '#dc2626', 1, { wk: 1, edge: '#1f2937', win: null, stripe: 1 });
@@ -550,8 +615,9 @@ window.SOS = window.SOS || {};
         roof(a, wh, '#ffffff', f.roofType || 'pyramid', '#ffffff');
       } else {
         if (bld) c = pr ? '#cfd7df' : bcol(f);
-        extrude(a, wh, c, cat === 'tent' ? 1 : fl, bld ? { wk: 1, ln: pr ? '#64748b' : '#89a4be', edge: pr ? '#2b3440' : '#6f8aa5', win: pr ? '#4b86c2' : 'rgba(137,164,190,.32)' } : null);
+        extrude(a, wh, c, cat === 'tent' ? 1 : fl, bld ? { wk: 1, ln: pr ? '#64748b' : '#89a4be', edge: pr ? '#2b3440' : '#6f8aa5', win: pr ? '#4b86c2' : 'rgba(137,164,190,.32)', door: true } : { door: cat === 'cottage' });
         roof(a, wh, c, f.roofType || 'flat', bld ? (pr ? '#dfe5ec' : '#52687f') : null);
+        if (bld && (f.roofType || 'flat') === 'flat') drawRooftopDetails(a, wh, fl);
         var cc = cen(a);
         if (cat === 'medical') { u = P(cc.x, cc.y, cam.pitch < 2 ? 0 : wh + .1); var z = Math.max(3, sc() * 1.2); ctx.fillStyle = '#ff3c3c'; ctx.fillRect(u[0] - z, u[1] - z / 3, 2 * z, 2 * z / 3); ctx.fillRect(u[0] - z / 3, u[1] - z, 2 * z / 3, 2 * z); }
         if (cat === 'security') { u = P(cc.x, cc.y, cam.pitch < 2 ? 0 : wh); v = P(cc.x, cc.y, cam.pitch < 2 ? 0 : wh + 2.5); ctx.strokeStyle = '#00d9ff'; line(u, v); ctx.beginPath(); ctx.arc(v[0], v[1], 4, 0, 6.3); ctx.fillStyle = '#00d9ff'; ctx.fill(); }
@@ -569,7 +635,6 @@ window.SOS = window.SOS || {};
     if (pt) hits.push({ f: f, c: P(c.x, c.y, cam.pitch < 2 ? 0 : 1) });
     else hits.push({ f: f, edge: f.category === 'fence', a: a.map(function (p) { return S2(p, 0); }), b: a.map(function (p) { return S2(p, h); }) });
   }
-
   var LPRI = { assembly: 1, gate: 1, medical: 1, hazard: 1, diesel_tank: 1, building: 2, pool: 2, cottage: 3, tent: 3, playground: 3, parking: 4, solar: 4, olive_zone: 5 };
   var LTINT = { building: '#52687f', hazard: '#d97706', diesel_tank: '#b91c1c', assembly: '#15803d', gate: '#b45309', medical: '#dc2626', pool: '#0284c7', cottage: '#a16207', tent: '#64748b', playground: '#b45309', parking: '#475569', solar: '#1d4ed8', olive_zone: '#3f6212' };
   function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
@@ -592,7 +657,6 @@ window.SOS = window.SOS || {};
     ctx.textBaseline = 'alphabetic';
   }
   function vis(f) { return f.visible !== false && layers[LAY[f.category] || 'build']; }
-
   function drawDimTag(p1, p2, col) {
     var s1 = P(p1.x, p1.y, 0), s2 = P(p2.x, p2.y, 0);
     if (Math.hypot(s2[0] - s1[0], s2[1] - s1[1]) < 24) return;
@@ -602,40 +666,28 @@ window.SOS = window.SOS || {};
     ctx.fillStyle = isPr() ? 'rgba(255,255,255,0.92)' : 'rgba(8,11,16,0.9)';
     ctx.fillRect(mx - tw / 2, my - 7, tw, 14);
     ctx.strokeStyle = col || '#00d9ff'; ctx.lineWidth = 0.8; ctx.strokeRect(mx - tw / 2, my - 7, tw, 14);
-    ctx.fillStyle = isPr() ? '#0f172a' : (col || '#00d9ff');
-    ctx.fillText(txt, mx, my + .5);
+    ctx.fillStyle = isPr() ? '#0f172a' : (col || '#00d9ff'); ctx.fillText(txt, mx, my + .5);
   }
-
   function drawCadOverlays() {
     var pr = isPr(), sf = getSel();
-    // 1. Selected polygon architectural dimensions & Vertex CAD Handles
     if (sf && sf.geometryType === 'polygon' && sf.coordsMetric.length >= 3) {
       var a = pts(sf);
-      if (layers.dims || tool === 'vertices') {
-        for (var i = 0; i < a.length; i++) drawDimTag(a[i], a[(i + 1) % a.length], tool === 'vertices' ? '#39ff14' : (pr ? '#0284c7' : '#00d9ff'));
-      }
+      if (layers.dims || tool === 'vertices') for (var i = 0; i < a.length; i++) drawDimTag(a[i], a[(i + 1) % a.length], tool === 'vertices' ? '#39ff14' : (pr ? '#0284c7' : '#00d9ff'));
       if (tool === 'vertices') {
-        // Highlight footprint outline on z=0
-        ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.setLineDash([]);
-        path(a.map(g0), 1); ctx.stroke();
-        // Midpoint (+) insert handles
+        ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.setLineDash([]); path(a.map(g0), 1); ctx.stroke();
         for (var j = 0; j < a.length; j++) {
           var p1 = a[j], p2 = a[(j + 1) % a.length], mp = P((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, 0);
           ctx.beginPath(); ctx.arc(mp[0], mp[1], 5.5, 0, 6.3);
           ctx.fillStyle = '#080b10'; ctx.fill(); ctx.strokeStyle = '#e8c84a'; ctx.lineWidth = 1.5; ctx.stroke();
-          ctx.fillStyle = '#e8c84a'; ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText('+', mp[0], mp[1] + .5);
+          ctx.fillStyle = '#e8c84a'; ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+', mp[0], mp[1] + .5);
         }
-        // Corner draggable handles
         for (var k = 0; k < a.length; k++) {
           var vp = P(a[k].x, a[k].y, 0);
           ctx.fillStyle = (drag && drag.m === 'vert' && drag.i === k) ? '#39ff14' : '#080b10';
           ctx.strokeStyle = '#00d9ff'; ctx.lineWidth = 2;
           ctx.fillRect(vp[0] - 5, vp[1] - 5, 10, 10); ctx.strokeRect(vp[0] - 5, vp[1] - 5, 10, 10);
         }
-        // Live area/perimeter pill
-        var cm = P(sf.center.x, sf.center.y, 0);
-        var stTxt = 'AREA ' + area(a).toFixed(1) + ' m2 | PERIM ' + perim(a).toFixed(1) + ' m | ' + a.length + ' PTS';
+        var cm = P(sf.center.x, sf.center.y, 0), stTxt = 'AREA ' + area(a).toFixed(1) + ' m2 | PERIM ' + perim(a).toFixed(1) + ' m | ' + a.length + ' PTS';
         ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         var sw = ctx.measureText(stTxt).width + 12;
         ctx.fillStyle = 'rgba(8,11,16,.9)'; ctx.fillRect(cm[0] - sw / 2, cm[1] - 9, sw, 18);
@@ -643,23 +695,18 @@ window.SOS = window.SOS || {};
         ctx.fillStyle = '#39ff14'; ctx.fillText(stTxt, cm[0], cm[1] + .5);
       }
     }
-
-    // 2. Active Draw Poly / Draw Rect Rubber-Band Preview
     if ((tool === 'draw_poly' || tool === 'draw_rect') && cad.drawPts.length) {
       var cur = snapPoint(mouse, cad.drawPts[cad.drawPts.length - 1]);
       if (tool === 'draw_rect') {
         var rInfo = makeOrientedRect(cad.drawPts[0], cur);
-        ctx.save();
-        fillPoly(rInfo.pts.map(g0), 'rgba(57,255,20,0.16)', '#39ff14');
-        ctx.lineWidth = 2; path(rInfo.pts.map(g0), 1); ctx.stroke();
+        ctx.save(); fillPoly(rInfo.pts.map(g0), 'rgba(57,255,20,0.16)', '#39ff14'); ctx.lineWidth = 2; path(rInfo.pts.map(g0), 1); ctx.stroke();
         var rc = P((cad.drawPts[0].x + cur.x) / 2, (cad.drawPts[0].y + cur.y) / 2, 0);
         var rt = rInfo.w.toFixed(2) + ' m x ' + rInfo.d.toFixed(2) + ' m (' + (rInfo.w * rInfo.d).toFixed(1) + ' m2)';
         ctx.font = 'bold 11px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         var rtw = ctx.measureText(rt).width + 12;
         ctx.fillStyle = 'rgba(8,11,16,.92)'; ctx.fillRect(rc[0] - rtw / 2, rc[1] - 9, rtw, 18);
         ctx.strokeStyle = '#39ff14'; ctx.strokeRect(rc[0] - rtw / 2, rc[1] - 9, rtw, 18);
-        ctx.fillStyle = '#39ff14'; ctx.fillText(rt, rc[0], rc[1] + .5);
-        ctx.restore();
+        ctx.fillStyle = '#39ff14'; ctx.fillText(rt, rc[0], rc[1] + .5); ctx.restore();
       } else {
         var dp = cad.drawPts.concat([cur]);
         ctx.save();
@@ -669,38 +716,24 @@ window.SOS = window.SOS || {};
         for (var m = 0; m < cad.drawPts.length - 1; m++) drawDimTag(cad.drawPts[m], cad.drawPts[m + 1], '#39ff14');
         var last = cad.drawPts[cad.drawPts.length - 1], segL = Math.hypot(cur.x - last.x, cur.y - last.y);
         var segAng = ((Math.atan2(cur.y - last.y, cur.x - last.x) / D) + 360) % 360;
-        var spM = P((last.x + cur.x) / 2, (last.y + cur.y) / 2, 0);
-        var dTxt = segL.toFixed(2) + ' m @ ' + segAng.toFixed(1) + '°';
+        var spM = P((last.x + cur.x) / 2, (last.y + cur.y) / 2, 0), dTxt = segL.toFixed(2) + ' m @ ' + segAng.toFixed(1) + '°';
         ctx.font = 'bold 11px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         var dw = ctx.measureText(dTxt).width + 10;
         ctx.fillStyle = 'rgba(8,11,16,.92)'; ctx.fillRect(spM[0] - dw / 2, spM[1] - 9, dw, 18);
         ctx.strokeStyle = '#e8c84a'; ctx.strokeRect(spM[0] - dw / 2, spM[1] - 9, dw, 18);
         ctx.fillStyle = '#e8c84a'; ctx.fillText(dTxt, spM[0], spM[1] + .5);
-        // Highlight first point for closing
         var p0 = P(cad.drawPts[0].x, cad.drawPts[0].y, 0);
         ctx.beginPath(); ctx.arc(p0[0], p0[1], cad.drawPts.length >= 3 ? 7 : 4, 0, 6.3);
-        ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.stroke();
-        ctx.restore();
+        ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
       }
     }
-
-    // 3. OSNAP Magnetic Marker (AutoCAD END / MID / CLOSE)
     if (cad.snapHit && (tool === 'draw_poly' || tool === 'draw_rect' || tool === 'vertices' || tool === 'measure')) {
       var sh = P(cad.snapHit.x, cad.snapHit.y, 0);
-      ctx.save();
-      ctx.strokeStyle = cad.snapHit.k === 'MID' ? '#e8c84a' : '#39ff14';
-      ctx.lineWidth = 2;
-      if (cad.snapHit.k === 'MID') {
-        ctx.beginPath(); ctx.moveTo(sh[0], sh[1] - 7); ctx.lineTo(sh[0] + 7, sh[1] + 6); ctx.lineTo(sh[0] - 7, sh[1] + 6); ctx.closePath(); ctx.stroke();
-      } else {
-        ctx.strokeRect(sh[0] - 6, sh[1] - 6, 12, 12);
-      }
-      ctx.font = 'bold 9px ' + MONO; ctx.fillStyle = ctx.strokeStyle; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-      ctx.fillText(cad.snapHit.k, sh[0] + 8, sh[1] - 6);
-      ctx.restore();
+      ctx.save(); ctx.strokeStyle = cad.snapHit.k === 'MID' ? '#e8c84a' : '#39ff14'; ctx.lineWidth = 2;
+      if (cad.snapHit.k === 'MID') { ctx.beginPath(); ctx.moveTo(sh[0], sh[1] - 7); ctx.lineTo(sh[0] + 7, sh[1] + 6); ctx.lineTo(sh[0] - 7, sh[1] + 6); ctx.closePath(); ctx.stroke(); }
+      else ctx.strokeRect(sh[0] - 6, sh[1] - 6, 12, 12);
+      ctx.font = 'bold 9px ' + MONO; ctx.fillStyle = ctx.strokeStyle; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText(cad.snapHit.k, sh[0] + 8, sh[1] - 6); ctx.restore();
     }
-
-    // 4. Bottom-center AutoCAD Dynamic Command / Hint Bar
     var hint = '';
     if (tool === 'vertices') hint = 'CAD VERTICES: Drag square=Move | Click (+)=Add corner | Alt+Click or DblClick=Delete | F8 Ortho | Esc Exit';
     else if (tool === 'draw_poly') hint = 'CAD POLYLINE (' + addType + '): Click pts | Type length (m)' + (cad.cmdBuf ? (' [' + cad.cmdBuf + ' m]') : '') + ' + Enter | Backspace Undo | Enter Close | Esc Cancel';
@@ -714,7 +747,7 @@ window.SOS = window.SOS || {};
     }
     ctx.textBaseline = 'alphabetic';
   }
-
+  // Grid, Overlays, Render Loop, Pointer Events & Public API
   function grid() {
     var pr = isPr(), s = sc(), st = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].filter(function (v) { return v * s >= 36; })[0] || 1000;
     var cs = [inv(0, 0), inv(W, 0), inv(0, H), inv(W, H)], b = bb(cs);
@@ -794,9 +827,7 @@ window.SOS = window.SOS || {};
       else { path(h.a.map(function (p) { return [p.x, p.y]; }), 1); ctx.stroke(); if (cam.pitch >= 2) { path(h.b.map(function (p) { return [p.x, p.y]; }), 1); ctx.stroke(); } }
       ctx.setLineDash([]);
     });
-    drawLabels();
-    drawCadOverlays();
-    overlays();
+    drawLabels(); drawCadOverlays(); overlays();
     St.emit('status', { x: mouse.x, y: mouse.y, zoom: cam.zoom, count: St.project.features.length, meta: St.project.meta, ortho: cad.ortho, osnap: cad.osnap, snap: cad.gridSnap });
   }
   function loop() {
@@ -810,7 +841,7 @@ window.SOS = window.SOS || {};
     dpr = hq ? Math.min(window.devicePixelRatio || 1, 3) : 1;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); dirty = 1;
   }
-  function viewEvt() { St.emit('view', { yaw: cam.yaw, pitch: cam.pitch, north: Math.abs(cam.yaw % 360) < .5, top2D: cam.pitch < 2 }); dirty = 1; }
+  function viewEvt() { St.emit('view', { yaw: cam.yaw, pitch: cam.pitch, persp: cam.persp, zBoost: cam.zBoost, north: Math.abs(cam.yaw % 360) < .5, top2D: cam.pitch < 2 }); dirty = 1; }
   function select(id) { sel = id; dirty = 1; St.emit('select', getSel()); }
   function hitAt(x, y) {
     for (var i = hits.length - 1; i >= 0; i--) {
@@ -832,8 +863,7 @@ window.SOS = window.SOS || {};
       center: c, height_m: d.h, floors: d.fl, roofType: d.roof, color: d.col,
       en_name: t.replace('_', ' '), renderMode: (t === 'tent' || t === 'cottage') ? 'solid' : undefined
     });
-    St.project.features.push(f);
-    if (t === 'fence') recalcMeta();
+    St.project.features.push(f); if (t === 'fence') recalcMeta();
     select(f.id); St.emit('change');
   }
   function addAt(x, y) {
@@ -859,7 +889,6 @@ window.SOS = window.SOS || {};
       var w = inv(p.x, p.y);
       if (e.button === 2 || e.shiftKey) { drag = { m: 'orbit', x: p.x, y: p.y }; return; }
       if (e.button === 1) { drag = { m: 'pan', x: p.x, y: p.y, cx: cam.cx, cy: cam.cy }; return; }
-
       if (tool === 'vertices') {
         var sf = getSel();
         if (sf && sf.geometryType === 'polygon' && sf.coordsMetric.length >= 3) {
@@ -871,50 +900,34 @@ window.SOS = window.SOS || {};
               var isDbl = (now - cad.lastVClick.t < 350 && cad.lastVClick.i === i);
               cad.lastVClick = { t: now, i: i };
               if (e.altKey || isDbl) {
-                if (a.length > 3) {
-                  St.snapshot(); a.splice(i, 1); sf.center = cen(a);
-                  if (sf.category === 'fence') recalcMeta();
-                  St.emit('change'); St.emit('select', sf); dirty = 1;
-                }
+                if (a.length > 3) { St.snapshot(); a.splice(i, 1); sf.center = cen(a); if (sf.category === 'fence') recalcMeta(); St.emit('change'); St.emit('select', sf); dirty = 1; }
                 return;
               }
-              drag = { m: 'vert', f: sf, i: i, moved: false };
-              return;
+              drag = { m: 'vert', f: sf, i: i, moved: false }; return;
             }
           }
-          // Check midpoint (+) handles to insert new corner
           for (var j = 0; j < a.length; j++) {
             var p1 = a[j], p2 = a[(j + 1) % a.length], mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2, mp = P(mx, my, 0);
             if (Math.hypot(p.x - mp[0], p.y - mp[1]) <= 10) {
               St.snapshot(); a.splice(j + 1, 0, { x: mx, y: my }); sf.center = cen(a);
               if (sf.category === 'fence') recalcMeta();
-              drag = { m: 'vert', f: sf, i: j + 1, moved: true };
-              St.emit('change'); St.emit('select', sf); dirty = 1;
-              return;
+              drag = { m: 'vert', f: sf, i: j + 1, moved: true }; St.emit('change'); St.emit('select', sf); dirty = 1; return;
             }
           }
         }
         var hv = hitAt(p.x, p.y);
         if (hv && hv.f.geometryType === 'polygon') { select(hv.f.id); return; }
-        drag = { m: 'pan', x: p.x, y: p.y, cx: cam.cx, cy: cam.cy };
-        return;
+        drag = { m: 'pan', x: p.x, y: p.y, cx: cam.cx, cy: cam.cy }; return;
       }
-
       if (tool === 'draw_poly') {
-        var anchor = cad.drawPts.length ? cad.drawPts[cad.drawPts.length - 1] : null;
-        var sp = snapPoint(w, anchor), now2 = Date.now();
+        var anchor = cad.drawPts.length ? cad.drawPts[cad.drawPts.length - 1] : null, sp = snapPoint(w, anchor), now2 = Date.now();
         if (cad.drawPts.length >= 3) {
           var p0 = P(cad.drawPts[0].x, cad.drawPts[0].y, 0);
           var dblClose = (now2 - cad.lastDClick.t < 320 && Math.hypot(p.x - cad.lastDClick.x, p.y - cad.lastDClick.y) < 10);
-          if (Math.hypot(p.x - p0[0], p.y - p0[1]) <= 14 || dblClose) {
-            createPolygonFeature(cad.drawPts);
-            cad.drawPts = []; cad.cmdBuf = ''; dirty = 1; return;
-          }
+          if (Math.hypot(p.x - p0[0], p.y - p0[1]) <= 14 || dblClose) { createPolygonFeature(cad.drawPts); cad.drawPts = []; cad.cmdBuf = ''; dirty = 1; return; }
         }
-        cad.lastDClick = { t: now2, x: p.x, y: p.y };
-        cad.drawPts.push(sp); cad.cmdBuf = ''; dirty = 1; return;
+        cad.lastDClick = { t: now2, x: p.x, y: p.y }; cad.drawPts.push(sp); cad.cmdBuf = ''; dirty = 1; return;
       }
-
       if (tool === 'draw_rect') {
         var sr = snapPoint(w, null);
         if (!cad.drawPts.length) { cad.drawPts = [sr]; dirty = 1; return; }
@@ -922,7 +935,6 @@ window.SOS = window.SOS || {};
         if (rInfo.w > 0.2 && rInfo.d > 0.2) createPolygonFeature(rInfo.pts);
         cad.drawPts = []; dirty = 1; return;
       }
-
       if (tool === 'add') { addAt(w.x, w.y); return; }
       if (tool === 'measure') {
         var sm = snapPoint(w, meas.length === 1 ? meas[0] : null);
@@ -936,7 +948,6 @@ window.SOS = window.SOS || {};
       }
       drag = { m: 'pan', x: p.x, y: p.y, cx: cam.cx, cy: cam.cy };
     });
-
     cv.addEventListener('pointermove', function (e) {
       var p = pos(e), w; if (ptrs[e.pointerId]) ptrs[e.pointerId] = p;
       w = inv(p.x, p.y); mouse = { x: w.x, y: w.y };
@@ -951,18 +962,16 @@ window.SOS = window.SOS || {};
         if (!drag.moved) { St.snapshot(); drag.moved = true; }
         var vf = drag.f, prevIdx = (drag.i - 1 + vf.coordsMetric.length) % vf.coordsMetric.length;
         var spv = snapPoint(w, vf.coordsMetric[prevIdx], vf, drag.i);
-        vf.coordsMetric[drag.i].x = +spv.x.toFixed(3);
-        vf.coordsMetric[drag.i].y = +spv.y.toFixed(3);
-        vf.center = cen(vf.coordsMetric);
-        if (vf.category === 'fence') recalcMeta();
+        vf.coordsMetric[drag.i].x = +spv.x.toFixed(3); vf.coordsMetric[drag.i].y = +spv.y.toFixed(3);
+        vf.center = cen(vf.coordsMetric); if (vf.category === 'fence') recalcMeta();
       } else if (drag.m === 'move') {
         if (!drag.moved) { St.snapshot(); drag.moved = true; }
         var f = getSel(); if (f) { var dx = w.x - drag.x, dy = w.y - drag.y; f.center.x += dx; f.center.y += dy; f.coordsMetric.forEach(function (q) { q.x += dx; q.y += dy; }); }
         drag.x = w.x; drag.y = w.y;
       } else if (drag.m === 'orbit') {
-        cam.yaw = (((cam.yaw + (p.x - drag.x) * .5) % 360) + 360) % 360; cam.pitch = cl(cam.pitch + (p.y - drag.y) * .3, 0, 75); drag.x = p.x; drag.y = p.y; viewEvt();
+        cam.yaw = (((cam.yaw + (p.x - drag.x) * .5) % 360) + 360) % 360; cam.pitch = cl(cam.pitch + (p.y - drag.y) * .3, 0, 78); drag.x = p.x; drag.y = p.y; viewEvt();
       } else if (drag.m === 'pinch' && Object.keys(ptrs).length >= 2) {
-        var t = two(); cam.zoom = cl(drag.z * t.d / drag.d, .3, 5); cam.yaw = (((drag.y - (t.a - drag.a) / D) % 360) + 360) % 360; viewEvt();
+        var t = two(); cam.zoom = cl(drag.z * t.d / drag.d, .25, 8); cam.yaw = (((drag.y - (t.a - drag.a) / D) % 360) + 360) % 360; viewEvt();
       }
     });
     function up(e) {
@@ -992,18 +1001,16 @@ window.SOS = window.SOS || {};
     getTool: function () { return tool; },
     setAddType: function (t) { addType = t; },
     setYaw: function (v) { cam.yaw = ((+v % 360) + 360) % 360; viewEvt(); },
-    setPitch: function (v) { cam.pitch = cl(+v, 0, 75); if (cam.pitch >= 2) cam.lastPitch = cam.pitch; viewEvt(); },
+    setPitch: function (v) { cam.pitch = cl(+v, 0, 78); if (cam.pitch >= 2) cam.lastPitch = cam.pitch; viewEvt(); },
+    setPersp: function (v) { cam.persp = cl(+v, 0, 1); viewEvt(); },
+    getPersp: function () { return cam.persp; },
+    setZBoost: function (v) { cam.zBoost = cl(+v, 1, 2.5); viewEvt(); },
+    getZBoost: function () { return cam.zBoost; },
+    getCam: function () { return Object.assign({}, cam); },
     nudgeYaw: function (d) { this.setYaw(cam.yaw + d); },
-    nudgePan: function (dxPx, dyPx) {
-      var a = inv(W / 2, H / 2), b = inv(W / 2 + dxPx, H / 2 + dyPx);
-      cam.cx += b.x - a.x; cam.cy += b.y - a.y; dirty = 1;
-    },
+    nudgePan: function (dxPx, dyPx) { var a = inv(W / 2, H / 2), b = inv(W / 2 + dxPx, H / 2 + dyPx); cam.cx += b.x - a.x; cam.cy += b.y - a.y; dirty = 1; },
     isTop2D: function () { return cam.pitch < 2; },
-    toggleTop2D: function () {
-      if (cam.pitch < 2) cam.pitch = cam.lastPitch >= 15 ? cam.lastPitch : 45;
-      else { cam.lastPitch = cam.pitch; cam.pitch = 0; }
-      viewEvt(); return cam.pitch < 2;
-    },
+    toggleTop2D: function () { if (cam.pitch < 2) cam.pitch = cam.lastPitch >= 15 ? cam.lastPitch : 48; else { cam.lastPitch = cam.pitch; cam.pitch = 0; } viewEvt(); return cam.pitch < 2; },
     setOrtho: function (b) { cad.ortho = !!b; dirty = 1; },
     isOrtho: function () { return cad.ortho; },
     setOsnap: function (b) { cad.osnap = !!b; cad.snapHit = null; dirty = 1; },
@@ -1016,10 +1023,7 @@ window.SOS = window.SOS || {};
     setTheme: function (t) { theme = t === 'print' ? 'print' : 'cyber'; dirty = 1; return theme; },
     toggleTheme: function () { return this.setTheme(theme === 'print' ? 'cyber' : 'print'); },
     setLayer: function (k, v) { layers[k] = v ? 1 : 0; dirty = 1; },
-    toggleNorthUp: function () {
-      var off = St.project.meta.trueNorthOffsetDeg || 0;
-      cam.yaw = Math.abs(cam.yaw % 360) < .5 ? ((off % 360) + 360) % 360 : 0; viewEvt(); return Math.abs(cam.yaw) < .5;
-    },
+    toggleNorthUp: function () { var off = St.project.meta.trueNorthOffsetDeg || 0; cam.yaw = Math.abs(cam.yaw % 360) < .5 ? ((off % 360) + 360) % 360 : 0; viewEvt(); return Math.abs(cam.yaw) < .5; },
     fitView: function () {
       var fs = St.project.features;
       if (!fs.length) { cam.cx = 0; cam.cy = 0; cam.base = 3; cam.zoom = 1; viewEvt(); return; }
@@ -1028,113 +1032,82 @@ window.SOS = window.SOS || {};
       cam.cx = (b.x0 + b.x1) / 2; cam.cy = (b.y0 + b.y1) / 2; cam.base = .85 * Math.min(W / w, H / d); cam.zoom = 1; viewEvt();
     },
     select: select, getSelected: getSel,
-    deleteSelected: function () {
-      var f = getSel(); if (!f) return;
-      St.project.features = St.project.features.filter(function (x) { return x !== f; }); sel = null; St.emit('select', null); St.emit('change');
-    },
+    deleteSelected: function () { var f = getSel(); if (!f) return; St.project.features = St.project.features.filter(function (x) { return x !== f; }); sel = null; St.emit('select', null); St.emit('change'); },
     duplicateSelected: function () {
       var f = getSel(); if (!f) return;
-      St.snapshot();
-      var copy = JSON.parse(JSON.stringify(f));
+      St.snapshot(); var copy = JSON.parse(JSON.stringify(f));
       copy.id = 'f_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       copy.en_name = (copy.en_name || copy.category) + ' (copy)';
-      copy.center.x += 2; copy.center.y -= 2;
-      copy.coordsMetric.forEach(function (p) { p.x += 2; p.y -= 2; });
+      copy.center.x += 2; copy.center.y -= 2; copy.coordsMetric.forEach(function (p) { p.x += 2; p.y -= 2; });
       St.project.features.push(copy); select(copy.id); St.emit('change');
     },
     sizeOf: function (f) { var b = bb(pts(f)); return { w: b.x1 - b.x0, d: b.y1 - b.y0 }; },
-    statsOf: function (f) {
-      if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3) return null;
-      var a = pts(f), b = bb(a);
-      return { area: area(a), perim: perim(a), verts: a.length, w: b.x1 - b.x0, d: b.y1 - b.y0 };
-    },
+    statsOf: function (f) { if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3) return null; var a = pts(f), b = bb(a); return { area: area(a), perim: perim(a), verts: a.length, w: b.x1 - b.x0, d: b.y1 - b.y0 }; },
     resizeSelected: function (w, d) {
       var f = getSel(); if (!f || f.geometryType !== 'polygon' || !(w > 0) || !(d > 0)) return;
-      bake(f);
-      var s = this.sizeOf(f), kx = s.w ? w / s.w : 1, ky = s.d ? d / s.d : 1, c = f.center;
+      bake(f); var s = this.sizeOf(f), kx = s.w ? w / s.w : 1, ky = s.d ? d / s.d : 1, c = f.center;
       f.coordsMetric = f.coordsMetric.map(function (p) { return { x: c.x + (p.x - c.x) * kx, y: c.y + (p.y - c.y) * ky }; });
-      if (f.category === 'fence') recalcMeta();
-      dirty = 1;
+      if (f.category === 'fence') recalcMeta(); dirty = 1;
     },
     squareSelected: function () {
       var f = getSel(); if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3) return;
       St.snapshot(); bake(f);
       var a = f.coordsMetric, th = domAng(a), cs = Math.cos(th), sn = Math.sin(th), m = cen(a);
       var loc = a.map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: dx * cs + dy * sn, y: -dx * sn + dy * cs }; });
-      var b = bb(loc), oldA = area(a), newA = (b.x1 - b.x0) * (b.y1 - b.y0);
-      var k = (newA > 1e-4 && oldA > 1e-4) ? Math.sqrt(oldA / newA) : 1;
+      var b = bb(loc), oldA = area(a), newA = (b.x1 - b.x0) * (b.y1 - b.y0), k = (newA > 1e-4 && oldA > 1e-4) ? Math.sqrt(oldA / newA) : 1;
       var mx = (b.x0 + b.x1) / 2, my = (b.y0 + b.y1) / 2, hw = (b.x1 - b.x0) * 0.5 * k, hh = (b.y1 - b.y0) * 0.5 * k;
       var rect = [[mx - hw, my - hh], [mx + hw, my - hh], [mx + hw, my + hh], [mx - hw, my + hh]];
       f.coordsMetric = rect.map(function (q) { return { x: +(m.x + q[0] * cs - q[1] * sn).toFixed(3), y: +(m.y + q[0] * sn + q[1] * cs).toFixed(3) }; });
-      f.center = cen(f.coordsMetric);
-      if (f.category === 'fence') recalcMeta();
-      St.emit('change'); St.emit('select', f); dirty = 1;
+      f.center = cen(f.coordsMetric); if (f.category === 'fence') recalcMeta(); St.emit('change'); St.emit('select', f); dirty = 1;
     },
     simplifySelected: function (tol) {
       var f = getSel(); if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length <= 3) return;
-      St.snapshot(); bake(f);
-      var t = tol || 0.6, res = simplifyClosed(f.coordsMetric, t);
+      St.snapshot(); bake(f); var t = tol || 0.6, res = simplifyClosed(f.coordsMetric, t);
       if (res.length === f.coordsMetric.length && f.coordsMetric.length > 4) res = simplifyClosed(f.coordsMetric, t * 2);
-      f.coordsMetric = res; f.center = cen(res);
-      if (f.category === 'fence') recalcMeta();
-      St.emit('change'); St.emit('select', f); dirty = 1;
+      f.coordsMetric = res; f.center = cen(res); if (f.category === 'fence') recalcMeta(); St.emit('change'); St.emit('select', f); dirty = 1;
     },
     offsetSelected: function (distM) {
-      var f = getSel(), d = parseFloat(distM);
-      if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3 || !d) return;
-      St.snapshot(); bake(f);
-      f.coordsMetric = offsetPoly(f.coordsMetric, d); f.center = cen(f.coordsMetric);
-      if (f.category === 'fence') recalcMeta();
-      St.emit('change'); St.emit('select', f); dirty = 1;
+      var f = getSel(), d = parseFloat(distM); if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3 || !d) return;
+      St.snapshot(); bake(f); f.coordsMetric = offsetPoly(f.coordsMetric, d); f.center = cen(f.coordsMetric);
+      if (f.category === 'fence') recalcMeta(); St.emit('change'); St.emit('select', f); dirty = 1;
     },
     mirrorSelected: function (axis) {
       var f = getSel(); if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3) return;
-      St.snapshot(); bake(f);
-      var a = cam.yaw * D, c = Math.cos(a), n = Math.sin(a), m = f.center;
+      St.snapshot(); bake(f); var a = cam.yaw * D, c = Math.cos(a), n = Math.sin(a), m = f.center;
       f.coordsMetric = f.coordsMetric.map(function (p) {
         var dx = p.x - m.x, dy = p.y - m.y, rx = dx * c - dy * n, ry = dx * n + dy * c;
         if (axis === 'h') rx = -rx; else ry = -ry;
         return { x: m.x + rx * c + ry * n, y: m.y - rx * n + ry * c };
       }).reverse();
-      f.center = cen(f.coordsMetric);
-      St.emit('change'); St.emit('select', f); dirty = 1;
+      f.center = cen(f.coordsMetric); St.emit('change'); St.emit('select', f); dirty = 1;
     },
     alignSelectedToSite: function () {
       var f = getSel(); if (!f || f.geometryType !== 'polygon' || f.coordsMetric.length < 3) return;
-      St.snapshot(); bake(f);
-      var siteAng = -(St.project.meta.trueNorthOffsetDeg || 0) * D, curAng = domAng(f.coordsMetric);
-      var diff = siteAng - curAng;
-      while (diff > Math.PI / 4) diff -= Math.PI / 2;
-      while (diff < -Math.PI / 4) diff += Math.PI / 2;
+      St.snapshot(); bake(f); var siteAng = -(St.project.meta.trueNorthOffsetDeg || 0) * D, diff = siteAng - domAng(f.coordsMetric);
+      while (diff > Math.PI / 4) diff -= Math.PI / 2; while (diff < -Math.PI / 4) diff += Math.PI / 2;
       var c = Math.cos(diff), n = Math.sin(diff), m = f.center;
       f.coordsMetric = f.coordsMetric.map(function (p) { var dx = p.x - m.x, dy = p.y - m.y; return { x: m.x + dx * c - dy * n, y: m.y + dx * n + dy * c }; });
-      f.center = cen(f.coordsMetric);
-      St.emit('change'); St.emit('select', f); dirty = 1;
+      f.center = cen(f.coordsMetric); St.emit('change'); St.emit('select', f); dirty = 1;
     },
-    // Option A: Fence-only offset / scale (preserves true size of all buildings inside)
     offsetFenceOnly: function (distM) {
       var d = parseFloat(distM); if (!d) return false;
       var fence = St.project.features.filter(function (f) { return f.category === 'fence' && f.geometryType === 'polygon' && f.coordsMetric.length >= 3; })[0];
       if (!fence) return false;
-      St.snapshot(); bake(fence);
-      fence.coordsMetric = offsetPoly(fence.coordsMetric, d); fence.center = cen(fence.coordsMetric);
+      St.snapshot(); bake(fence); fence.coordsMetric = offsetPoly(fence.coordsMetric, d); fence.center = cen(fence.coordsMetric);
       recalcMeta(); St.emit('change'); if (sel === fence.id) St.emit('select', fence); dirty = 1; return true;
     },
     scaleFenceOnly: function (pct) {
       var k = parseFloat(pct) / 100; if (!(k > 0.1 && k < 10)) return false;
       var fence = St.project.features.filter(function (f) { return f.category === 'fence' && f.geometryType === 'polygon' && f.coordsMetric.length >= 3; })[0];
       if (!fence) return false;
-      St.snapshot(); bake(fence);
-      var c = fence.center;
+      St.snapshot(); bake(fence); var c = fence.center;
       fence.coordsMetric = fence.coordsMetric.map(function (p) { return { x: c.x + (p.x - c.x) * k, y: c.y + (p.y - c.y) * k }; });
       recalcMeta(); St.emit('change'); if (sel === fence.id) St.emit('select', fence); dirty = 1; return true;
     },
-    // Option B: Scale ENTIRE site uniformly (features + routes + exterior signage pins)
     scaleEntireSite: function (pct) {
       var k = parseFloat(pct) / 100; if (!(k > 0.1 && k < 10)) return false;
       var fs = St.project.features; if (!fs.length) return false;
-      St.snapshot();
-      var all = []; fs.forEach(function (f) { all = all.concat(f.coordsMetric); });
+      St.snapshot(); var all = []; fs.forEach(function (f) { all = all.concat(f.coordsMetric); });
       var b = bb(all), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
       fs.forEach(function (f) {
         if (f.geometryType === 'polygon') bake(f);
@@ -1150,30 +1123,20 @@ window.SOS = window.SOS || {};
       });
       recalcMeta(); St.emit('change'); St.emit('select', getSel()); this.fitView(); return true;
     },
-    finishDraw: function () {
-      if (tool === 'draw_poly' && cad.drawPts.length >= 3) { createPolygonFeature(cad.drawPts); cad.drawPts = []; cad.cmdBuf = ''; dirty = 1; return true; }
-      return false;
-    },
+    finishDraw: function () { if (tool === 'draw_poly' && cad.drawPts.length >= 3) { createPolygonFeature(cad.drawPts); cad.drawPts = []; cad.cmdBuf = ''; dirty = 1; return true; } return false; },
     cancelDraw: function () { cad.drawPts = []; cad.cmdBuf = ''; cad.snapHit = null; dirty = 1; },
     undoDrawPoint: function () { if (cad.drawPts.length) { cad.drawPts.pop(); cad.cmdBuf = ''; dirty = 1; return true; } return false; },
     handleCadKey: function (e) {
       if (tool !== 'draw_poly' || !cad.drawPts.length) return false;
       if (/^[0-9.]$/.test(e.key)) { cad.cmdBuf += e.key; dirty = 1; return true; }
-      if (e.key === 'Backspace') {
-        e.preventDefault();
-        if (cad.cmdBuf.length) cad.cmdBuf = cad.cmdBuf.slice(0, -1);
-        else cad.drawPts.pop();
-        dirty = 1; return true;
-      }
+      if (e.key === 'Backspace') { e.preventDefault(); if (cad.cmdBuf.length) cad.cmdBuf = cad.cmdBuf.slice(0, -1); else cad.drawPts.pop(); dirty = 1; return true; }
       if (e.key === 'Enter') {
-        e.preventDefault();
-        var v = parseFloat(cad.cmdBuf);
+        e.preventDefault(); var v = parseFloat(cad.cmdBuf);
         if (v > 0) {
           var last = cad.drawPts[cad.drawPts.length - 1], cur = snapPoint(mouse, last);
           var dx = cur.x - last.x, dy = cur.y - last.y, L = Math.hypot(dx, dy);
           if (L < 1e-4) { dx = 1; dy = 0; L = 1; }
-          cad.drawPts.push({ x: last.x + dx / L * v, y: last.y + dy / L * v });
-          cad.cmdBuf = ''; dirty = 1; return true;
+          cad.drawPts.push({ x: last.x + dx / L * v, y: last.y + dy / L * v }); cad.cmdBuf = ''; dirty = 1; return true;
         }
         if (cad.drawPts.length >= 3) { createPolygonFeature(cad.drawPts); cad.drawPts = []; cad.cmdBuf = ''; dirty = 1; return true; }
       }
