@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>SOS Emergency &amp; Evacuation 3D Master Studio</title>
-<link rel="stylesheet" href="css/style.css?v=6">
+<link rel="stylesheet" href="css/style.css?v=7">
 <style>
   .cad-stat{background:#080b10;border:1px solid #1b2838;border-radius:4px;padding:6px 8px;font-size:10px;color:#00d9ff;line-height:1.5;margin-bottom:4px}
   .cad-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:4px 0}
@@ -26,7 +26,8 @@
   <button id="btnClear" class="dng">Clear Data (OPSEC)</button>
   <span class="dv"></span>
   <button id="btnNorth">North Up</button>
-  <button id="btn2D" title="Toggle flat 2D CAD Top drafting view vs 3D Iso">View: 3D Iso</button>
+  <button id="btn2D" title="Toggle flat 2D CAD Top drafting view vs 3D Perspective">View: 3D Iso</button>
+  <button id="btnGL" class="cy" title="Launch WebGL 3D GPU Cinema &amp; First-Person Walk">WebGL 3D GPU</button>
   <button id="btnTheme">Theme: Cyber</button>
   <button id="btnQual">Quality: High</button>
   <button id="btnUndo">Undo</button>
@@ -56,7 +57,7 @@
     <h3>CAD Precision (Snap / Ortho)</h3>
     <div class="row">
       <button id="btnOrtho" title="Lock to 90-deg orthogonal axes (F8)">ORTHO (F8): OFF</button>
-      <button id="btnOsnap" class="on" title="Snap to vertices & midpoints (F3)">OSNAP (F3): ON</button>
+      <button id="btnOsnap" class="on" title="Snap to vertices &amp; midpoints (F3)">OSNAP (F3): ON</button>
     </div>
     <label>Grid Snap
       <select id="snapGrid">
@@ -69,7 +70,7 @@
     </label>
 
     <h3>Site &amp; Fence CAD</h3>
-    <p class="mut">Option A — Fence Only (keeps buildings real size):</p>
+    <p class="mut">Option A &mdash; Fence Only (keeps buildings real size):</p>
     <div class="cad-inline">
       <input type="number" id="fenceOffM" step="0.5" value="2" title="Expand (+) or shrink (-) perimeter fence in meters">
       <button id="btnFenceOff" class="cy">Offset Fence (m)</button>
@@ -78,16 +79,18 @@
       <input type="number" id="fenceScPct" step="1" value="105" title="Scale fence only (%)">
       <button id="btnFenceSc" class="cy">Scale Fence %</button>
     </div>
-    <p class="mut">Option B — Scale Entire Village (all features + routes):</p>
+    <p class="mut">Option B &mdash; Scale Entire Village (all features + routes):</p>
     <div class="cad-inline">
-      <input type="number" id="siteScPct" step="1" value="110" title="Uniformly scale all features, routes & pins (%)">
+      <input type="number" id="siteScPct" step="1" value="110" title="Uniformly scale all features, routes &amp; pins (%)">
       <button id="btnSiteSc" class="amb">Scale Site %</button>
     </div>
 
-    <h3>Camera</h3>
+    <h3>3D Camera &amp; Depth</h3>
     <label>Orbit (<span id="yawV">0</span>&deg;)<input type="range" id="yaw" min="0" max="360" step="1" value="0"></label>
-    <label>Tilt (<span id="pitchV">45</span>&deg;)<input type="range" id="pitch" min="0" max="75" step="1" value="45"></label>
-    <div class="row"><button id="btnFit">Fit View</button></div>
+    <label>Tilt (<span id="pitchV">48</span>&deg;)<input type="range" id="pitch" min="0" max="78" step="1" value="48"></label>
+    <label>3D Perspective (<span id="perspV">45</span>%)<input type="range" id="persp" min="0" max="1" step="0.05" value="0.45"></label>
+    <label>3D Depth Boost (<span id="zBoostV">1.25</span>x)<input type="range" id="zBoost" min="1" max="2.5" step="0.05" value="1.25"></label>
+    <div class="row"><button id="btnFit">Fit View</button><button id="btnGL2" class="cy">Launch GPU 3D</button></div>
     <p class="mut">Arrows = Pan. Q/E = Orbit. Shift/Right-drag = Orbit. Wheel = Zoom.</p>
 
     <h3>Layers</h3>
@@ -124,13 +127,14 @@
 </div>
 <div id="st">Ready. Import a .kml or .sos.json from your device.</div>
 
-<script src="js/state.js?v=6"></script>
-<script src="js/kmlParser.js?v=6"></script>
-<script src="js/engine.js?v=6"></script>
-<script src="js/interior.js?v=6"></script>
-<script src="js/routing.js?v=6"></script>
-<script src="js/signage.js?v=6"></script>
-<script src="js/exporter.js?v=6"></script>
+<script src="js/state.js?v=7"></script>
+<script src="js/kmlParser.js?v=7"></script>
+<script src="js/engine.js?v=7"></script>
+<script src="js/interior.js?v=7"></script>
+<script src="js/routing.js?v=7"></script>
+<script src="js/signage.js?v=7"></script>
+<script src="js/exporter.js?v=7"></script>
+<script src="js/webgl3d.js?v=7"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -168,6 +172,9 @@
   $('btnClear').onclick = function () { if (confirm('Wipe ALL workspace data, undo history and the saved browser draft?')) { St.clearWorkspace(); E.fitView(); } };
   $('btnNorth').onclick = function () { E.toggleNorthUp(); };
   $('btn2D').onclick = function () { E.toggleTop2D(); };
+  function openGL() { if (S.WebGL3D) S.WebGL3D.open(); else alert('js/webgl3d.js is not loaded. Verify the file exists in js/webgl3d.js on GitHub.'); }
+  $('btnGL').onclick = openGL;
+  $('btnGL2').onclick = openGL;
   $('btnTheme').onclick = function () {
     var t = E.toggleTheme();
     $('btnTheme').textContent = 'Theme: ' + (t === 'print' ? 'Print' : 'Cyber');
@@ -212,13 +219,8 @@
   $('btnOsnap').onclick = function () { E.setOsnap(!E.isOsnap()); syncCadBtns(); };
   $('snapGrid').onchange = function () { E.setSnapGrid(this.value); };
 
-  // Site & Fence CAD Buttons (Option A & Option B)
-  $('btnFenceOff').onclick = function () {
-    if (!E.offsetFenceOnly($('fenceOffM').value)) alert('No Perimeter Fence polygon found.');
-  };
-  $('btnFenceSc').onclick = function () {
-    if (!E.scaleFenceOnly($('fenceScPct').value)) alert('No Perimeter Fence polygon found (or invalid %).');
-  };
+  $('btnFenceOff').onclick = function () { if (!E.offsetFenceOnly($('fenceOffM').value)) alert('No Perimeter Fence polygon found.'); };
+  $('btnFenceSc').onclick = function () { if (!E.scaleFenceOnly($('fenceScPct').value)) alert('No Perimeter Fence polygon found (or invalid %).'); };
   $('btnSiteSc').onclick = function () {
     var v = parseFloat($('siteScPct').value);
     if (!(v > 10 && v < 1000)) { alert('Enter a valid percentage (e.g. 90 or 115).'); return; }
@@ -229,11 +231,16 @@
   [].forEach.call(document.querySelectorAll('[data-layer]'), function (cb) { cb.onchange = function () { E.setLayer(cb.dataset.layer, cb.checked); }; });
   $('yaw').oninput = function () { E.setYaw(this.value); };
   $('pitch').oninput = function () { E.setPitch(this.value); };
+  $('persp').oninput = function () { E.setPersp(this.value); };
+  $('zBoost').oninput = function () { E.setZBoost(this.value); };
   $('chkAuto').onchange = function () { St.autoSave = this.checked; if (this.checked) St.autoSaveDraft(); };
   $('btnRestore').onclick = function () { if (St.restoreDraft()) E.fitView(); else alert('No saved draft found in this browser.'); };
 
   St.on('view', function (v) {
-    $('yaw').value = Math.round(v.yaw); $('yawV').textContent = Math.round(v.yaw); $('pitch').value = Math.round(v.pitch); $('pitchV').textContent = Math.round(v.pitch);
+    $('yaw').value = Math.round(v.yaw); $('yawV').textContent = Math.round(v.yaw);
+    $('pitch').value = Math.round(v.pitch); $('pitchV').textContent = Math.round(v.pitch);
+    if (v.persp !== undefined) { $('persp').value = v.persp; $('perspV').textContent = Math.round(v.persp * 100); }
+    if (v.zBoost !== undefined) { $('zBoost').value = v.zBoost; $('zBoostV').textContent = Number(v.zBoost).toFixed(2); }
     $('btnNorth').textContent = v.north ? 'North Up' : 'Site Align';
     $('btn2D').textContent = v.top2D ? 'View: 2D CAD' : 'View: 3D Iso';
     $('btn2D').classList.toggle('cy', !!v.top2D);
@@ -327,7 +334,7 @@
   renderInsp(null); renderList(); syncCadBtns();
 
   document.addEventListener('keydown', function (e) {
-    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen())) return;
+    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen()) || (S.WebGL3D && S.WebGL3D.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'F8') { e.preventDefault(); E.setOrtho(!E.isOrtho()); syncCadBtns(); return; }
     if (e.key === 'F3') { e.preventDefault(); E.setOsnap(!E.isOsnap()); syncCadBtns(); return; }
