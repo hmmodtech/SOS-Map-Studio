@@ -105,6 +105,7 @@
   <button id="btnRoute">Routing</button>
   <button id="btnSign">Signage</button>
   <button id="btnExp" class="cy">Export Field</button>
+  <button id="btnSat" class="amb" title="Realistic Satellite Patch &amp; Poster Composer">Sat Studio</button>
   <span class="sp"></span>
   <button id="btnR" title="Toggle inspector">Inspector &#9776;</button>
   <input type="file" id="fileKml" accept=".kml,application/vnd.google-earth.kml+xml,text/xml" hidden>
@@ -203,6 +204,7 @@
 <script src="js/signage.js?v=12"></script>
 <script src="js/exporter.js?v=12"></script>
 <script src="js/webgl3d.js?v=12"></script>
+<script src="js/satComposer.js?v=13"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -365,6 +367,7 @@
   $('btnRoute').onclick = function () { if (S.Routing) S.Routing.open(); };
   $('btnSign').onclick = function () { if (S.Signage) S.Signage.open(); };
   $('btnExp').onclick = function () { if (S.Exporter) S.Exporter.open(); };
+  $('btnSat').onclick = function () { if (S.SatComposer) S.SatComposer.open(); };
   $('routeView').onchange = function () { if (S.Routing) S.Routing.setOverlayMode(this.value); };
   $('btnFit').onclick = function () { E.fitView(); };
   $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
@@ -554,7 +557,7 @@
   syncProjName(); renderInsp(null); renderList(); syncCadBtns();
 
   document.addEventListener('keydown', function (e) {
-    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen()) || (S.WebGL3D && S.WebGL3D.isOpen())) return;
+    if ((S.Interior && S.Interior.isOpen()) || (S.Routing && S.Routing.isOpen()) || (S.Signage && S.Signage.isOpen()) || (S.Exporter && S.Exporter.isOpen()) || (S.WebGL3D && S.WebGL3D.isOpen()) || (S.SatComposer && S.SatComposer.isOpen())) return;
     var t = e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return;
     if (e.key === 'F8') { e.preventDefault(); E.setOrtho(!E.isOrtho()); syncCadBtns(); return; }
     if (e.key === 'F3') { e.preventDefault(); E.setOsnap(!E.isOsnap()); syncCadBtns(); return; }
