@@ -67,7 +67,7 @@ window.SOS = window.SOS || {};
   var ov = null, cv = null, ctx = null, built = false, isOpen = false;
   var W = 1, H = 1, dpr = 1;
   var view = { s: 1, ox: 0, oy: 0 };
-  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'futsal_rect' | 'building_add' | 'tent_add' | 'tree_add' | 'poly_draw' | 'pin' | 'calibrate' | 'measure'
+  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'crop_asset' | 'crop_base' | 'lasso_erase' | 'wand' | 'brush' | 'eyedropper' | 'futsal_rect' | 'building_add' | 'tent_add' | 'tree_add' | 'poly_draw' | 'pin' | 'calibrate' | 'measure'
   var selAssetId = null;
   var selPinId = null;
   var pinCat = 'bldg';
@@ -79,6 +79,7 @@ window.SOS = window.SOS || {};
   var cutFeatherPx = 2;
   var cloneCfg = { src: null, pickMode: false, radius: 28, feather: 0.65, opacity: 1.0, rotDeg: 0, followDrag: true };
   var eraseCfg = { radius: 28, feather: 0.65, opacity: 1.0 };
+  var photoCfg = { color: '#c5a267', radius: 18, hardness: 0.5, opacity: 0.75, tolerance: 28, contiguous: true };
   var statusMsg = 'Import a full-resolution satellite image to begin.';
 
   // =========================================================================
@@ -460,8 +461,8 @@ window.SOS = window.SOS || {};
               ctr.y = clamp(ctr.y, 0, imgs.base.naturalHeight) + idx * 18;
               var asp = im.naturalWidth / Math.max(1, im.naturalHeight);
               var wPx = doc.calibration.pxPerMeter > 0
-                ? clamp(12 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.4)
-                : clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.9);
+                ? clamp(30 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.92)
+                : clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.92);
               var hPx = wPx / asp;
               var cleanName = file.name.replace(/\.[^.]+$/, '');
               var ast = normalizeAsset({
@@ -496,13 +497,142 @@ window.SOS = window.SOS || {};
         if (addedCount > 0) {
           persistToIDB();
           setTool('select');
-          setStatus('Added ' + addedCount + ' PNG asset(s) to 03_Movable_Assets. Drag corners to resize or top handle to rotate.', false);
+          setStatus('Added ' + addedCount + ' asset(s) at full scale. Use Crop Asset, Lasso Erase, or Magic Wand to trim unwanted parts.', false);
         } else {
           setStatus('No valid image files could be decoded.', true);
         }
         syncUI(); draw();
       }
     }
+  }
+
+  // =========================================================================
+  // PHOTOSHOP-STYLE PHOTO TOOLS (CROP ASSET, CROP BASE, LASSO ERASE, WAND, BRUSH)
+  // =========================================================================
+  function replaceAssetImageDataUrl(asset, newDataUrl, newDims, statusText) {
+    decodeImage(newDataUrl, function (err, im) {
+      if (err || !im || !im.naturalWidth) { setStatus('Failed to update image.', true); return; }
+      pushUndo();
+      var binId = asset.binId || uid('abin');
+      bins.assets[binId] = newDataUrl;
+      imgs.assets[binId] = im;
+      asset.binId = binId;
+      asset.naturalW = im.naturalWidth;
+      asset.naturalH = im.naturalHeight;
+      if (newDims) {
+        if (newDims.x != null) asset.x = newDims.x;
+        if (newDims.y != null) asset.y = newDims.y;
+        if (newDims.wPx != null) asset.wPx = newDims.wPx;
+        if (newDims.hPx != null) asset.hPx = newDims.hPx;
+      }
+      persistToIDB();
+      syncUI();
+      draw();
+      if (statusText) setStatus(statusText, false);
+    });
+  }
+
+  function applyCropSelectedAsset() {
+    var a = getSelAsset();
+    if (!a || !imgs.assets[a.binId]) { setStatus('Select an asset first, then draw crop points around what you want to keep.', true); return; }
+    if (!S.SatPhotoTools || cutPts.length < 3) { setStatus('Click at least 3 points around the stadium/area to keep.', true); return; }
+    var ptsSnap = cutPts.slice();
+    S.SatPhotoTools.cropSelectedAssetByPolygon(a, imgs.assets[a.binId], ptsSnap, cutFeatherPx, function (err, res) {
+      cutPts = [];
+      if (err || !res) { setStatus((err && err.message) || 'Crop failed.', true); syncUI(); draw(); return; }
+      setTool('select');
+      replaceAssetImageDataUrl(a, res.dataUrl, { x: res.x, y: res.y, wPx: res.wPx, hPx: res.hPx }, 'Cropped asset to selected area only; outside removed.');
+    });
+  }
+
+  function applyLassoEraseAsset() {
+    var a = getSelAsset();
+    if (!a || !imgs.assets[a.binId]) { setStatus('Select an asset first to erase part of it.', true); return; }
+    if (!S.SatPhotoTools || cutPts.length < 3) { setStatus('Click at least 3 points around the area to erase.', true); return; }
+    var ptsSnap = cutPts.slice();
+    S.SatPhotoTools.erasePolygonFromAsset(a, imgs.assets[a.binId], ptsSnap, cutFeatherPx, function (err, newUrl) {
+      cutPts = [];
+      if (err || !newUrl) { setStatus((err && err.message) || 'Lasso erase failed.', true); syncUI(); draw(); return; }
+      setTool('select');
+      replaceAssetImageDataUrl(a, newUrl, null, 'Erased selected area from asset.');
+    });
+  }
+
+  function applyMagicWandOnAsset(imgPt) {
+    var a = getSelAsset();
+    if (!a || !imgs.assets[a.binId]) { setStatus('Select an asset first, then click the unwanted background color.', true); return; }
+    if (!S.SatPhotoTools) return;
+    S.SatPhotoTools.magicWandRemoveColor(a, imgs.assets[a.binId], imgPt, photoCfg.tolerance, photoCfg.contiguous, function (err, newUrl) {
+      if (err || !newUrl) { setStatus((err && err.message) || 'Magic Wand could not remove color.', true); return; }
+      replaceAssetImageDataUrl(a, newUrl, null, 'Removed matching background color with Magic Wand.');
+    });
+  }
+
+  function applyCropBaseRect(p1, p2) {
+    if (!imgs.base || !S.SatPhotoTools) return;
+    S.SatPhotoTools.cropBaseCanvasRect(imgs.base, { x0: p1.x, y0: p1.y, x1: p2.x, y1: p2.y }, function (err, res) {
+      if (err || !res) { setStatus((err && err.message) || 'Base crop failed.', true); return; }
+      decodeImage(res.dataUrl, function (dErr, im) {
+        if (dErr || !im) { setStatus('Failed to decode cropped base.', true); return; }
+        opGen++;
+        pushUndo();
+        bins.base = res.dataUrl;
+        imgs.base = im;
+        doc.base.width = res.width;
+        doc.base.height = res.height;
+        doc.base.byteSize = Math.round(res.dataUrl.length * 0.75);
+        // Shift assets & cleanup patches into new cropped coordinate origin
+        doc.assets.forEach(function (a) { a.x = +(a.x - res.x0).toFixed(2); a.y = +(a.y - res.y0).toFixed(2); });
+        doc.patches.forEach(function (pt) {
+          pt.sx = +(pt.sx - res.x0).toFixed(2); pt.sy = +(pt.sy - res.y0).toFixed(2);
+          pt.dx = +(pt.dx - res.x0).toFixed(2); pt.dy = +(pt.dy - res.y0).toFixed(2);
+        });
+        doc.cleanupErases.forEach(function (st) {
+          st.pts.forEach(function (pt) { pt.x = +(pt.x - res.x0).toFixed(2); pt.y = +(pt.y - res.y0).toFixed(2); });
+        });
+        cleanupDirty = true;
+        persistToIDB();
+        setTool('select');
+        fitView();
+        syncUI();
+        draw();
+        setStatus('Cropped Base Satellite to ' + res.width + 'x' + res.height + ' px.', false);
+      });
+    });
+  }
+
+  function stampPaintBrushDab(imgPt) {
+    if (!imgs.base) return;
+    doc.layers.cleanup.visible = true;
+    var r = Math.max(2, photoCfg.radius);
+    var cvBrush = document.createElement('canvas');
+    var d = Math.ceil(r * 2) + 4;
+    cvBrush.width = d; cvBrush.height = d;
+    var bg = cvBrush.getContext('2d');
+    var rIn = Math.max(0, r * clamp(photoCfg.hardness, 0, 0.95));
+    var grad = bg.createRadialGradient(d / 2, d / 2, rIn, d / 2, d / 2, r);
+    grad.addColorStop(0, photoCfg.color);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    bg.fillStyle = grad;
+    bg.fillRect(0, 0, d, d);
+
+    if (!cleanupCacheCv) {
+      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+      var sc = Math.min(1, MAX_LIVE_CACHE_EDGE / Math.max(iw, ih));
+      cleanupCacheCv = document.createElement('canvas');
+      cleanupCacheCv.width = Math.max(1, Math.round(iw * sc));
+      cleanupCacheCv.height = Math.max(1, Math.round(ih * sc));
+      cleanupCacheScale = cleanupCacheCv.width / iw;
+      cleanupCacheCv.getContext('2d').clearRect(0, 0, cleanupCacheCv.width, cleanupCacheCv.height);
+      cleanupDirty = false;
+    }
+    var cctx = cleanupCacheCv.getContext('2d');
+    cctx.save();
+    cctx.globalAlpha = clamp(photoCfg.opacity, 0.05, 1);
+    var dr = r * cleanupCacheScale;
+    cctx.drawImage(cvBrush, imgPt.x * cleanupCacheScale - dr, imgPt.y * cleanupCacheScale - dr, dr * 2, dr * 2);
+    cctx.restore();
+    cvBrush.width = 0; cvBrush.height = 0;
   }
 
   // =========================================================================
@@ -939,7 +1069,7 @@ window.SOS = window.SOS || {};
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('SAT STUDIO READY — IMPORT HIGH-RES SATELLITE IMAGE (01_Base_Satellite)', W / 2, H / 2 - 12);
         ctx.font = '11px ' + MONO;
-        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • Futsal + Red Net • Buildings, Tents, Trees & Polygons', W / 2, H / 2 + 12);
+        ctx.fillText('Zero-Compression Base • Crop & Lasso • Magic Wand & Brush • Futsal + Red Net • Dual Export', W / 2, H / 2 + 12);
         return;
       }
 
@@ -1020,13 +1150,22 @@ window.SOS = window.SOS || {};
       ctx.strokeRect(tl[0], tl[1], dw, dh);
 
       var sel = getSelAsset();
-      if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan')) {
+      if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'wand')) {
         drawAssetGizmo(sel);
       }
 
       if (tool === 'clone') drawCloneOverlay();
       if (tool === 'erase') drawEraserOverlay();
-      if (tool === 'cutout' || tool === 'poly_draw') drawCutoutOverlay();
+      if (tool === 'brush') drawBrushOverlay();
+      if (tool === 'cutout' || tool === 'poly_draw' || tool === 'crop_asset' || tool === 'lasso_erase') drawCutoutOverlay();
+
+      if (tool === 'crop_base' && drag && drag.m === 'crop_base') {
+        var sA = i2s(drag.p1.x, drag.p1.y), sB = i2s(drag.p2.x, drag.p2.y);
+        ctx.save();
+        ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+        ctx.strokeRect(Math.min(sA[0], sB[0]), Math.min(sA[1], sB[1]), Math.abs(sB[0] - sA[0]), Math.abs(sB[1] - sA[1]));
+        ctx.restore();
+      }
 
       if (tool === 'futsal_rect' && drag && drag.m === 'futsal_rect' && S.SatProcedural) {
         var q = S.SatProcedural.makeOrientedRect(drag.p1, drag.p2);
@@ -1138,17 +1277,26 @@ window.SOS = window.SOS || {};
     ctx.restore();
   }
 
+  function drawBrushOverlay() {
+    if (!hovImg) return;
+    var hs = i2s(hovImg.x, hovImg.y);
+    ctx.save();
+    ctx.strokeStyle = photoCfg.color || '#00e5ff'; ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, photoCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
   function drawCutoutOverlay() {
     if (!cutPts.length) return;
     ctx.save();
     var sp = cutPts.map(function (p) { return i2s(p.x, p.y); });
     if (sp.length >= 3) {
-      ctx.fillStyle = 'rgba(0,255,157,0.16)';
+      ctx.fillStyle = tool === 'lasso_erase' ? 'rgba(255,71,87,0.18)' : 'rgba(0,255,157,0.16)';
       ctx.beginPath();
       sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
       ctx.closePath(); ctx.fill();
     }
-    ctx.strokeStyle = '#00ff9d'; ctx.lineWidth = 2;
+    ctx.strokeStyle = tool === 'lasso_erase' ? '#ff4757' : '#00ff9d'; ctx.lineWidth = 2;
     ctx.beginPath();
     sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
     ctx.stroke();
@@ -1325,6 +1473,8 @@ window.SOS = window.SOS || {};
     cv.addEventListener('dblclick', function () {
       if (tool === 'cutout' && cutPts.length >= 3) extractCutoutFromBase();
       else if (tool === 'poly_draw' && cutPts.length >= 3) finalizeFreePolygon();
+      else if (tool === 'crop_asset' && cutPts.length >= 3) applyCropSelectedAsset();
+      else if (tool === 'lasso_erase' && cutPts.length >= 3) applyLassoEraseAsset();
     });
 
     cv.addEventListener('pointerdown', function (e) {
@@ -1376,6 +1526,52 @@ window.SOS = window.SOS || {};
         selAssetId = null;
         drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
         syncUI(); draw(); return;
+      }
+
+      if (tool === 'crop_asset' || tool === 'lasso_erase') {
+        if (!getSelAsset()) {
+          var clickedA = hitAssetAt(ip);
+          if (clickedA) { selAssetId = clickedA.id; syncUI(); }
+          else { setStatus('Click/select an asset first before drawing crop/erase points.', true); return; }
+        }
+        if (cutPts.length >= 3) {
+          var fSp = i2s(cutPts[0].x, cutPts[0].y);
+          if (Math.hypot(p.x - fSp[0], p.y - fSp[1]) <= 13) {
+            if (tool === 'crop_asset') applyCropSelectedAsset();
+            else applyLassoEraseAsset();
+            return;
+          }
+        }
+        cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
+        setStatus((tool === 'crop_asset' ? 'Crop Keep' : 'Lasso Erase') + ' points: ' + cutPts.length + ' (click first yellow point or press Enter).', false);
+        syncUI(); draw(); return;
+      }
+
+      if (tool === 'crop_base') {
+        drag = { m: 'crop_base', p1: ip, p2: ip };
+        setStatus('Drag rectangle to crop Base Satellite image...', false);
+        draw(); return;
+      }
+
+      if (tool === 'wand') {
+        applyMagicWandOnAsset(ip);
+        return;
+      }
+
+      if (tool === 'eyedropper') {
+        if (S.SatPhotoTools) {
+          photoCfg.color = S.SatPhotoTools.sampleColorAt(imgs.base, ip.x, ip.y);
+          setStatus('Sampled color ' + photoCfg.color + ' from (' + Math.round(ip.x) + ',' + Math.round(ip.y) + ').', false);
+          setTool('brush');
+        }
+        return;
+      }
+
+      if (tool === 'brush') {
+        pushUndo();
+        stampPaintBrushDab(ip);
+        drag = { m: 'brush', last: ip };
+        draw(); return;
       }
 
       if (tool === 'clone') {
@@ -1533,6 +1729,13 @@ window.SOS = window.SOS || {};
         view.s = ns;
         view.ox = t.x - drag.imgPt.x * ns;
         view.oy = t.y - drag.imgPt.y * ns;
+      } else if (drag.m === 'crop_base') {
+        drag.p2 = ip;
+      } else if (drag.m === 'brush') {
+        if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(2, photoCfg.radius * 0.25)) {
+          stampPaintBrushDab(ip);
+          drag.last = ip;
+        }
       } else if (drag.m === 'futsal_rect') {
         drag.p2 = ip;
       } else if (drag.m === 'move') {
@@ -1593,6 +1796,16 @@ window.SOS = window.SOS || {};
 
     function up(e) {
       delete ptrs[e.pointerId];
+      if (drag && drag.m === 'crop_base') {
+        var cpA = drag.p1, cpB = drag.p2;
+        drag = null;
+        if (Math.hypot(cpB.x - cpA.x, cpB.y - cpA.y) >= 12) applyCropBaseRect(cpA, cpB);
+        draw(); return;
+      }
+      if (drag && drag.m === 'brush') {
+        drag = null;
+        persistToIDB(); syncUI(); draw(); return;
+      }
       if (drag && drag.m === 'futsal_rect') {
         var dRect = Math.hypot(drag.p2.x - drag.p1.x, drag.p2.y - drag.p1.y);
         var fp1 = drag.p1, fp2 = drag.p2;
@@ -1621,6 +1834,7 @@ window.SOS = window.SOS || {};
       draw();
     }, { passive: false });
   }
+
   function onKeyDown(e) {
     if (!isOpen) return;
     var tag = e.target && e.target.tagName;
@@ -1634,11 +1848,13 @@ window.SOS = window.SOS || {};
       setTool('select');
       syncUI(); draw(); return;
     }
-    if (tool === 'cutout' || tool === 'poly_draw') {
+    if (tool === 'cutout' || tool === 'poly_draw' || tool === 'crop_asset' || tool === 'lasso_erase') {
       if (e.key === 'Backspace' && cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
       if (e.key === 'Enter' && cutPts.length >= 3) {
         e.preventDefault();
         if (tool === 'poly_draw') finalizeFreePolygon();
+        else if (tool === 'crop_asset') applyCropSelectedAsset();
+        else if (tool === 'lasso_erase') applyLassoEraseAsset();
         else extractCutoutFromBase();
         return;
       }
@@ -1663,8 +1879,8 @@ window.SOS = window.SOS || {};
       }
     }
   }
-
   function onKeyUp(e) { if (e.key === ' ') space = false; }
+
   // =========================================================================
   // UI BUILD & SYNC (CYBER HUD + DAYLIGHT DESIGN MODE COMPATIBLE)
   // =========================================================================
@@ -1706,7 +1922,7 @@ window.SOS = window.SOS || {};
   function setTool(t) {
     tool = t;
     if (t !== 'measure') measPts = [];
-    if (t !== 'cutout' && t !== 'poly_draw') cutPts = [];
+    if (t !== 'cutout' && t !== 'poly_draw' && t !== 'crop_asset' && t !== 'lasso_erase') cutPts = [];
     if (t !== 'clone') cloneCfg.pickMode = false;
     if (!ov) return;
     [].forEach.call(ov.querySelectorAll('[data-sctool]'), function (b) {
@@ -2009,6 +2225,15 @@ window.SOS = window.SOS || {};
       : 'Source: Not picked (Alt+Click)';
     ov.querySelector('#scPickSrc').classList.toggle('on', !!cloneCfg.pickMode);
 
+    if (document.activeElement !== ov.querySelector('#scPhotoCol')) ov.querySelector('#scPhotoCol').value = photoCfg.color;
+    ov.querySelector('#scPhotoTol').value = photoCfg.tolerance;
+    ov.querySelector('#scPhotoTolV').textContent = photoCfg.tolerance;
+    ov.querySelector('#scPhotoCont').checked = !!photoCfg.contiguous;
+    ov.querySelector('#scPhotoRad').value = photoCfg.radius;
+    ov.querySelector('#scPhotoRadV').textContent = photoCfg.radius;
+    ov.querySelector('#scPhotoHard').value = Math.round(photoCfg.hardness * 100);
+    ov.querySelector('#scPhotoHardV').textContent = Math.round(photoCfg.hardness * 100);
+
     var al = ov.querySelector('#scAssetList');
     if (!doc.assets.length) {
       al.innerHTML = '<div class="mut">No assets yet. Add Futsal, Building, Tent, Tree, Polygon, or PNGs.</div>';
@@ -2039,7 +2264,7 @@ window.SOS = window.SOS || {};
     }
 
     var cutBox = ov.querySelector('#scCutBox');
-    cutBox.style.display = (tool === 'cutout' || tool === 'poly_draw') ? 'flex' : 'none';
+    cutBox.style.display = (tool === 'cutout' || tool === 'poly_draw' || tool === 'crop_asset' || tool === 'lasso_erase') ? 'flex' : 'none';
     ov.querySelector('#scCutPtsV').textContent = String(cutPts.length);
 
     renderAssetInspector();
@@ -2096,10 +2321,16 @@ window.SOS = window.SOS || {};
     ov.dataset.ajDone = '1';
     ov.innerHTML =
       '<div class="satc-top">' +
-        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (COMPLETE)</b>' +
+        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHOTOSHOP + PROCEDURAL)</b>' +
         '<button id="scImportBase" class="on">Import Base</button>' +
         '<button data-sctool="select" class="on">Select / Move</button>' +
         '<button data-sctool="pan">Pan</button>' +
+        '<button data-sctool="crop_asset" class="amb" title="Crop selected asset to polygon; delete outside area">Crop Asset</button>' +
+        '<button data-sctool="lasso_erase" class="dng" title="Draw polygon to erase part of selected asset">Lasso Erase</button>' +
+        '<button data-sctool="wand" class="cy" title="Magic Wand: click unwanted background color on selected asset">Magic Wand</button>' +
+        '<button data-sctool="crop_base" title="Drag rectangle to crop Base Satellite image">Crop Base</button>' +
+        '<button data-sctool="brush" class="on" title="Paint brush on cleanup/ground layer">Brush</button>' +
+        '<button data-sctool="eyedropper" class="cy" title="Sample soil/ground color from Base Satellite">Eyedropper</button>' +
         '<button data-sctool="clone" class="amb" title="Soft-Feathered Clone Patch (Alt+Click picks source)">Clone Patch</button>' +
         '<button data-sctool="erase" title="Soft Eraser on 02_Ground_Cleanup (reveals original base)">Soft Eraser</button>' +
         '<button data-sctool="cutout" class="cy" title="Cut real pixels from 01_Base_Satellite (A) & relocate to (B)">Cut &amp; Relocate A➔B</button>' +
@@ -2136,6 +2367,17 @@ window.SOS = window.SOS || {};
           '<div id="scBaseInfo" class="satc-card"></div>' +
           '<div class="row"><button id="scReplaceBase" class="cy">Load / Replace Base</button></div>' +
 
+          '<h4>Photoshop Brush &amp; Magic Wand</h4>' +
+          '<div class="satc-card">' +
+            '<div class="satc-grid2">' +
+              '<label>Color<input type="color" id="scPhotoCol" value="#c5a267"></label>' +
+              '<label>Wand Tol (<span id="scPhotoTolV">28</span>)<input type="range" id="scPhotoTol" min="5" max="140" step="1" value="28"></label>' +
+            '</div>' +
+            '<label class="ck"><input type="checkbox" id="scPhotoCont" checked>Contiguous Wand (Connected Area)</label>' +
+            '<label>Brush Size (<span id="scPhotoRadV">18</span> px)<input type="range" id="scPhotoRad" min="4" max="160" step="1" value="18"></label>' +
+            '<label>Brush Hardness (<span id="scPhotoHardV">50</span>%)<input type="range" id="scPhotoHard" min="0" max="95" step="5" value="50"></label>' +
+          '</div>' +
+
           '<h4>02_Ground_Cleanup (Patch &amp; Eraser)</h4>' +
           '<div class="satc-card">' +
             '<div id="scCleanStat" class="mut"></div>' +
@@ -2160,10 +2402,10 @@ window.SOS = window.SOS || {};
 
         '<aside class="satc-side r">' +
           '<div id="scCutBox" class="satc-card" style="display:none;border-color:var(--glow-cyan,#00e5ff)">' +
-            '<b>Polygon / Cutout Builder</b>' +
+            '<b>Polygon / Crop / Lasso Builder</b>' +
             '<div class="mut">Click points on map. Vertices: <b id="scCutPtsV">0</b></div>' +
-            '<label>Edge Feather (<span id="scCutFeaV">2</span> px)<input type="range" id="scCutFea" min="0" max="6" step="0.5" value="2"></label>' +
-            '<div class="row"><button id="scCutUndo">Undo Pt</button><button id="scCutExec" class="on">Finish / Extract</button><button id="scCutCan" class="dng">Cancel</button></div>' +
+            '<label>Edge Feather (<span id="scCutFeaV">2</span> px)<input type="range" id="scCutFea" min="0" max="10" step="0.5" value="2"></label>' +
+            '<div class="row"><button id="scCutUndo">Undo Pt</button><button id="scCutExec" class="on">Apply</button><button id="scCutCan" class="dng">Cancel</button></div>' +
           '</div>' +
 
           '<h4>Selected Asset Inspector</h4>' +
@@ -2289,6 +2531,22 @@ window.SOS = window.SOS || {};
     bindLay('#scLayAssets', 'assets');
     bindLay('#scLayOver', 'overlays');
 
+    ov.querySelector('#scPhotoCol').onchange = function () { photoCfg.color = this.value; };
+    ov.querySelector('#scPhotoTol').oninput = function () {
+      photoCfg.tolerance = +this.value;
+      ov.querySelector('#scPhotoTolV').textContent = this.value;
+    };
+    ov.querySelector('#scPhotoCont').onchange = function () { photoCfg.contiguous = !!this.checked; };
+    ov.querySelector('#scPhotoRad').oninput = function () {
+      photoCfg.radius = +this.value;
+      ov.querySelector('#scPhotoRadV').textContent = this.value;
+      draw();
+    };
+    ov.querySelector('#scPhotoHard').oninput = function () {
+      photoCfg.hardness = (+this.value) / 100;
+      ov.querySelector('#scPhotoHardV').textContent = this.value;
+    };
+
     var clnOpPushed = false;
     ov.querySelector('#scCleanOp').oninput = function () {
       if (!clnOpPushed) { pushUndo(); clnOpPushed = true; }
@@ -2344,6 +2602,8 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scCutUndo').onclick = function () { if (cutPts.length) { cutPts.pop(); syncUI(); draw(); } };
     ov.querySelector('#scCutExec').onclick = function () {
       if (tool === 'poly_draw') finalizeFreePolygon();
+      else if (tool === 'crop_asset') applyCropSelectedAsset();
+      else if (tool === 'lasso_erase') applyLassoEraseAsset();
       else extractCutoutFromBase();
     };
     ov.querySelector('#scCutCan').onclick = function () { cutPts = []; setTool('select'); };
@@ -2382,7 +2642,6 @@ window.SOS = window.SOS || {};
       persistToIDB(); syncUI(); draw();
     };
 
-    // Layer 04 Print Overlays & Dual High-Res Export Controls
     if (S.SatExport) {
       ov.querySelector('#scPinCat').innerHTML = Object.keys(S.SatExport.PIN_CATS).map(function (k) {
         return '<option value="' + k + '">' + esc(S.SatExport.PIN_CATS[k].label + ' / ' + S.SatExport.PIN_CATS[k].ar) + '</option>';
@@ -2580,3 +2839,5 @@ window.SOS = window.SOS || {};
     clearData: clearData
   };
 })(window.SOS);
+
+  function onKeyUp(e) { if (e.key === ' ') space = false; }
