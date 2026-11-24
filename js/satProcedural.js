@@ -26,24 +26,12 @@ window.SOS = window.SOS || {};
     return { x0: x0, y0: y0, x1: x1, y1: y1, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
   }
 
-  function pointInPoly(px, py, pts) {
-    var inside = false;
-    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      var xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
-      var hit = ((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-9) + xi);
-      if (hit) inside = !inside;
-    }
-    return inside;
-  }
-
-  // Build oriented 4-corner rectangle in image pixels from two corner clicks
   function makeOrientedRect(p1, p2) {
     var dx = p2.x - p1.x, dy = p2.y - p1.y;
     var len = Math.hypot(dx, dy);
     if (len < 2) return null;
     var ux = dx / len, uy = dy / len;
     var nx = -uy, ny = ux;
-    // Default perpendicular width = 0.6 * length (matches 30x18m 5-a-side ratio)
     var halfW = Math.max(8, len * 0.30);
     return [
       { x: +(p1.x + nx * halfW).toFixed(2), y: +(p1.y + ny * halfW).toFixed(2) },
@@ -53,7 +41,15 @@ window.SOS = window.SOS || {};
     ];
   }
 
-  // Render Un-grassed Futsal Pitch + Chain-Link Fence + Red Top Netting onto a transparent PNG canvas
+  function seededRandom(seedInit) {
+    var s = seedInit >>> 0;
+    return function () {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  // 1. Un-grassed Futsal Pitch + Chain-Link Fence + Red Top Netting
   function renderFutsalAssetCanvas(opts) {
     var wPx = Math.max(32, Math.round(opts.wPx || 240));
     var hPx = Math.max(24, Math.round(opts.hPx || 144));
@@ -64,30 +60,25 @@ window.SOS = window.SOS || {};
     var c = document.createElement('canvas');
     c.width = cw; c.height = ch;
     var g = c.getContext('2d');
+    var rand = seededRandom(90210);
 
     var soilCol = opts.soilColor || '#c9ae82';
     var lineCol = opts.lineColor || 'rgba(248,250,252,0.52)';
     var fenceCol = opts.fenceColor || 'rgba(71,85,105,0.72)';
-    var topNetCol = opts.topNetColor || 'rgba(220,38,38,0.76)';
+    var topNetCol = opts.topNetColor || 'rgba(220,38,38,0.78)';
     var fenceBand = Math.max(5, Math.round(Math.min(cw, ch) * 0.085));
     var topBand = Math.max(2.5, Math.round(fenceBand * 0.38));
 
-    // 1. Un-grassed compacted sandy/earth pitch surface with subtle natural speckle
     g.fillStyle = soilCol;
     g.fillRect(0, 0, cw, ch);
 
-    var seed = 90210;
     var specks = Math.min(1800, Math.floor((cw * ch) / 90));
     for (var i = 0; i < specks; i++) {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      var rx = (seed % 10000) / 10000 * cw;
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      var ry = (seed % 10000) / 10000 * ch;
+      var rx = rand() * cw, ry = rand() * ch;
       g.fillStyle = (i % 2 === 0) ? 'rgba(60,45,25,0.08)' : 'rgba(255,248,230,0.08)';
       g.fillRect(rx, ry, 2, 2);
     }
 
-    // 2. Futsal court markings (outer boundary, halfway line, center circle, penalty boxes)
     var padX = fenceBand + Math.max(4, cw * 0.03);
     var padY = fenceBand + Math.max(4, ch * 0.04);
     var fw = Math.max(12, cw - padX * 2);
@@ -98,30 +89,25 @@ window.SOS = window.SOS || {};
     g.lineWidth = lw;
     g.strokeRect(padX, padY, fw, fh);
 
-    // Center line & circle
     var midX = padX + fw / 2, midY = padY + fh / 2;
     g.beginPath(); g.moveTo(midX, padY); g.lineTo(midX, padY + fh); g.stroke();
     var cRad = Math.max(4, Math.min(fw, fh) * 0.16);
     g.beginPath(); g.arc(midX, midY, cRad, 0, Math.PI * 2); g.stroke();
 
-    // Left & right penalty areas
     var penW = fw * 0.15, penH = fh * 0.52;
     g.strokeRect(padX, midY - penH / 2, penW, penH);
     g.strokeRect(padX + fw - penW, midY - penH / 2, penW, penH);
 
-    // 3. Perimeter chain-link mesh + upper red safety netting strip
     function drawMeshEdge(x0, y0, x1, y1, nx, ny) {
       var segLen = Math.hypot(x1 - x0, y1 - y0);
       if (segLen < 2) return;
       var steps = Math.max(4, Math.round(segLen / Math.max(4, fenceBand * 0.45)));
 
-      // Outer & inner wire rails
       g.strokeStyle = fenceCol;
       g.lineWidth = Math.max(1, lw * 0.9);
       g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
       g.beginPath(); g.moveTo(x0 + nx * fenceBand, y0 + ny * fenceBand); g.lineTo(x1 + nx * fenceBand, y1 + ny * fenceBand); g.stroke();
 
-      // Diagonal chain-link weave inside band
       g.lineWidth = Math.max(0.7, lw * 0.65);
       for (var k = 0; k < steps; k++) {
         var t0 = k / steps, t1 = (k + 1) / steps;
@@ -133,7 +119,6 @@ window.SOS = window.SOS || {};
         g.stroke();
       }
 
-      // Red top netting along outer perimeter edge
       g.fillStyle = topNetCol;
       g.beginPath();
       g.moveTo(x0, y0);
@@ -156,7 +141,6 @@ window.SOS = window.SOS || {};
       }
     }
 
-    // Top, Right, Bottom, Left inward normals
     drawMeshEdge(0, 0, cw, 0, 0, 1);
     drawMeshEdge(cw, 0, cw, ch, -1, 0);
     drawMeshEdge(cw, ch, 0, ch, 0, -1);
@@ -165,7 +149,69 @@ window.SOS = window.SOS || {};
     return c.toDataURL('image/png');
   }
 
-  // Render top-down white/ivory field tent onto a transparent PNG canvas
+  // 2. Top-Down Building / Prefab Structure with Roof Ridge, Parapet & AC/Solar Detail
+  function renderBuildingAssetCanvas(opts) {
+    var wPx = Math.max(24, Math.round(opts.wPx || 140));
+    var hPx = Math.max(24, Math.round(opts.hPx || 96));
+    var sc = Math.min(1, MAX_PROC_EDGE / Math.max(wPx, hPx));
+    var cw = Math.max(14, Math.round(wPx * sc));
+    var ch = Math.max(14, Math.round(hPx * sc));
+
+    var c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    var g = c.getContext('2d');
+
+    var roofCol = opts.roofColor || '#e2e8f0';
+    var trimCol = opts.trimColor || '#64748b';
+    var ridgeCol = opts.ridgeColor || 'rgba(100,116,139,0.55)';
+    var pad = Math.max(2, Math.round(Math.min(cw, ch) * 0.04));
+    var bw = cw - pad * 2, bh = ch - pad * 2;
+
+    g.fillStyle = roofCol;
+    g.fillRect(pad, pad, bw, bh);
+
+    // Subtle roof bevel / parapet border
+    g.strokeStyle = trimCol;
+    g.lineWidth = Math.max(1.2, Math.min(cw, ch) * 0.025);
+    g.strokeRect(pad, pad, bw, bh);
+
+    // Roof central ridge / rib lines for realistic aerial look
+    g.strokeStyle = ridgeCol;
+    g.lineWidth = Math.max(0.8, Math.min(cw, ch) * 0.012);
+    if (bw >= bh) {
+      g.beginPath();
+      g.moveTo(pad, pad + bh / 2);
+      g.lineTo(pad + bw, pad + bh / 2);
+      g.stroke();
+      var ribs = Math.min(10, Math.max(3, Math.floor(bw / Math.max(10, bh * 0.35))));
+      for (var i = 1; i < ribs; i++) {
+        var rx = pad + (bw * i) / ribs;
+        g.beginPath(); g.moveTo(rx, pad + 2); g.lineTo(rx, pad + bh - 2); g.stroke();
+      }
+    } else {
+      g.beginPath();
+      g.moveTo(pad + bw / 2, pad);
+      g.lineTo(pad + bw / 2, pad + bh);
+      g.stroke();
+      var ribsV = Math.min(10, Math.max(3, Math.floor(bh / Math.max(10, bw * 0.35))));
+      for (var j = 1; j < ribsV; j++) {
+        var ry = pad + (bh * j) / ribsV;
+        g.beginPath(); g.moveTo(pad + 2, ry); g.lineTo(pad + bw - 2, ry); g.stroke();
+      }
+    }
+
+    // Small rooftop mechanical unit
+    var uw = Math.max(4, Math.min(bw, bh) * 0.16);
+    g.fillStyle = 'rgba(148,163,184,0.65)';
+    g.strokeStyle = 'rgba(51,65,85,0.6)';
+    g.lineWidth = 1;
+    g.fillRect(pad + bw * 0.14, pad + bh * 0.18, uw, uw);
+    g.strokeRect(pad + bw * 0.14, pad + bh * 0.18, uw, uw);
+
+    return c.toDataURL('image/png');
+  }
+
+  // 3. Top-Down Field Tent with Seams, Guy-Lines & Ridge
   function renderTentAssetCanvas(opts) {
     var wPx = Math.max(24, Math.round(opts.wPx || 96));
     var hPx = Math.max(24, Math.round(opts.hPx || 96));
@@ -182,13 +228,12 @@ window.SOS = window.SOS || {};
     var rw = cw - pad * 2, rh = ch - pad * 2;
 
     g.fillStyle = col;
-    g.strokeStyle = 'rgba(51,65,85,0.55)';
+    g.strokeStyle = 'rgba(71,85,105,0.55)';
     g.lineWidth = Math.max(1, Math.min(cw, ch) * 0.02);
     g.fillRect(pad, pad, rw, rh);
     g.strokeRect(pad, pad, rw, rh);
 
-    // Ridge/diagonal tent canvas seams
-    g.strokeStyle = 'rgba(100,116,139,0.45)';
+    g.strokeStyle = 'rgba(120,113,108,0.45)';
     g.lineWidth = Math.max(0.8, Math.min(cw, ch) * 0.014);
     if (rw >= rh) {
       g.beginPath();
@@ -206,7 +251,68 @@ window.SOS = window.SOS || {};
     return c.toDataURL('image/png');
   }
 
-  // Render arbitrary closed polygon into a tight transparent PNG canvas (1:1 natural coords)
+  // 4. Top-Down Natural Tree Crown (Organic Multi-Lobe Foliage + Leaf Texture)
+  function renderTreeAssetCanvas(opts) {
+    var dPx = Math.max(24, Math.round(opts.dPx || 96));
+    var sc = Math.min(1, MAX_PROC_EDGE / dPx);
+    var csz = Math.max(16, Math.round(dPx * sc));
+
+    var c = document.createElement('canvas');
+    c.width = csz; c.height = csz;
+    var g = c.getContext('2d');
+    var rand = seededRandom(opts.seed || 4242);
+
+    var cx = csz / 2, cy = csz / 2;
+    var baseR = csz * 0.34;
+    var baseCol = opts.foliageColor || '#3f6236';
+    var hiCol = opts.highlightColor || '#5b8449';
+    var darkCol = opts.shadeColor || '#284222';
+
+    // Outer organic foliage lobes
+    var lobes = 11;
+    g.fillStyle = darkCol;
+    g.beginPath();
+    for (var i = 0; i <= lobes; i++) {
+      var ang = (i / lobes) * Math.PI * 2;
+      var rad = baseR * (0.86 + rand() * 0.28);
+      var px = cx + Math.cos(ang) * rad;
+      var py = cy + Math.sin(ang) * rad;
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+
+    // Main mid-tone canopy
+    g.fillStyle = baseCol;
+    g.beginPath();
+    for (var j = 0; j <= lobes; j++) {
+      var a2 = (j / lobes) * Math.PI * 2 + 0.15;
+      var r2 = baseR * (0.78 + rand() * 0.24);
+      var x2 = cx + Math.cos(a2) * r2;
+      var y2 = cy + Math.sin(a2) * r2;
+      if (j === 0) g.moveTo(x2, y2); else g.lineTo(x2, y2);
+    }
+    g.closePath();
+    g.fill();
+
+    // Sunlit crown clusters & micro leaf tufts
+    var tufts = Math.min(48, Math.max(12, Math.floor(csz / 3)));
+    for (var k = 0; k < tufts; k++) {
+      var dist = rand() * baseR * 0.78;
+      var th = rand() * Math.PI * 2;
+      var tx = cx + Math.cos(th) * dist;
+      var ty = cy + Math.sin(th) * dist;
+      var tr = Math.max(1.8, csz * (0.04 + rand() * 0.05));
+      g.fillStyle = (k % 3 === 0) ? hiCol : baseCol;
+      g.beginPath();
+      g.arc(tx, ty, tr, 0, Math.PI * 2);
+      g.fill();
+    }
+
+    return c.toDataURL('image/png');
+  }
+
+  // 5. Closed Custom Polygon Asset (1:1 Natural Coordinates)
   function renderPolygonAssetFromPoints(baseImg, polyPts, fillCol, strokeCol) {
     if (!polyPts || polyPts.length < 3) return null;
     var b = polyBounds(polyPts);
@@ -247,7 +353,7 @@ window.SOS = window.SOS || {};
       g.fill();
     }
 
-    g.strokeStyle = strokeCol || 'rgba(15,23,42,0.75)';
+    g.strokeStyle = strokeCol || 'rgba(0,229,255,0.85)';
     g.lineWidth = 2;
     g.stroke();
 
@@ -265,7 +371,7 @@ window.SOS = window.SOS || {};
     var url = builderFn();
     procCache[key] = url;
     procOrder.push(key);
-    while (procOrder.length > 24) {
+    while (procOrder.length > 36) {
       delete procCache[procOrder.shift()];
     }
     return url;
@@ -280,9 +386,10 @@ window.SOS = window.SOS || {};
     makeOrientedRect: makeOrientedRect,
     polyCenter: polyCenter,
     polyBounds: polyBounds,
-    pointInPoly: pointInPoly,
     renderFutsalAssetCanvas: renderFutsalAssetCanvas,
+    renderBuildingAssetCanvas: renderBuildingAssetCanvas,
     renderTentAssetCanvas: renderTentAssetCanvas,
+    renderTreeAssetCanvas: renderTreeAssetCanvas,
     renderPolygonAssetFromPoints: renderPolygonAssetFromPoints,
     getCachedProceduralUrl: getCachedProceduralUrl,
     clearProceduralCache: clearProceduralCache
