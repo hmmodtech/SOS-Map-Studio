@@ -50,6 +50,7 @@ window.SOS = window.SOS || {};
   }
 
   // 1. Un-grassed Futsal Pitch + Chain-Link Fence + Red Top Netting
+ // 1. Un-grassed Futsal Pitch + Lower Chain-Link + Upper Red Netting + Posts
   function renderFutsalAssetCanvas(opts) {
     var wPx = Math.max(32, Math.round(opts.wPx || 240));
     var hPx = Math.max(24, Math.round(opts.hPx || 144));
@@ -62,28 +63,33 @@ window.SOS = window.SOS || {};
     var g = c.getContext('2d');
     var rand = seededRandom(90210);
 
-    var soilCol = opts.soilColor || '#c9ae82';
-    var lineCol = opts.lineColor || 'rgba(248,250,252,0.52)';
-    var fenceCol = opts.fenceColor || 'rgba(71,85,105,0.72)';
-    var topNetCol = opts.topNetColor || 'rgba(220,38,38,0.78)';
-    var fenceBand = Math.max(5, Math.round(Math.min(cw, ch) * 0.085));
-    var topBand = Math.max(2.5, Math.round(fenceBand * 0.38));
+    var soilCol = opts.soilColor || '#c5a267';
+    var lineCol = opts.lineColor || 'rgba(248,250,252,0.48)';
+    var postCol = opts.postColor || '#64748b';
+    var lowerMeshCol = opts.fenceColor || 'rgba(100,116,139,0.68)';
+    var upperRedNetCol = opts.topNetColor || 'rgba(185,48,38,0.68)';
 
+    var upperNetBand = Math.max(3, Math.round(Math.min(cw, ch) * 0.045));
+    var lowerFenceBand = Math.max(5, Math.round(Math.min(cw, ch) * 0.065));
+    var totalWallBand = upperNetBand + lowerFenceBand;
+
+    // 1. Compacted sandy/earth court surface (un-grassed)
     g.fillStyle = soilCol;
     g.fillRect(0, 0, cw, ch);
 
-    var specks = Math.min(1800, Math.floor((cw * ch) / 90));
+    var specks = Math.min(2000, Math.floor((cw * ch) / 85));
     for (var i = 0; i < specks; i++) {
       var rx = rand() * cw, ry = rand() * ch;
-      g.fillStyle = (i % 2 === 0) ? 'rgba(60,45,25,0.08)' : 'rgba(255,248,230,0.08)';
+      g.fillStyle = (i % 2 === 0) ? 'rgba(65,45,20,0.08)' : 'rgba(255,246,220,0.09)';
       g.fillRect(rx, ry, 2, 2);
     }
 
-    var padX = fenceBand + Math.max(4, cw * 0.03);
-    var padY = fenceBand + Math.max(4, ch * 0.04);
+    // 2. Subtle court pitch lines inside perimeter
+    var padX = totalWallBand + Math.max(4, cw * 0.03);
+    var padY = totalWallBand + Math.max(4, ch * 0.04);
     var fw = Math.max(12, cw - padX * 2);
     var fh = Math.max(10, ch - padY * 2);
-    var lw = Math.max(1.2, Math.min(cw, ch) * 0.011);
+    var lw = Math.max(1.2, Math.min(cw, ch) * 0.01);
 
     g.strokeStyle = lineCol;
     g.lineWidth = lw;
@@ -98,53 +104,88 @@ window.SOS = window.SOS || {};
     g.strokeRect(padX, midY - penH / 2, penW, penH);
     g.strokeRect(padX + fw - penW, midY - penH / 2, penW, penH);
 
-    function drawMeshEdge(x0, y0, x1, y1, nx, ny) {
+    // 3. Perimeter upper red safety net + lower chain-link fence + vertical steel posts
+    function drawPerimeterSide(x0, y0, x1, y1, nx, ny) {
       var segLen = Math.hypot(x1 - x0, y1 - y0);
       if (segLen < 2) return;
-      var steps = Math.max(4, Math.round(segLen / Math.max(4, fenceBand * 0.45)));
 
-      g.strokeStyle = fenceCol;
-      g.lineWidth = Math.max(1, lw * 0.9);
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      g.beginPath(); g.moveTo(x0 + nx * fenceBand, y0 + ny * fenceBand); g.lineTo(x1 + nx * fenceBand, y1 + ny * fenceBand); g.stroke();
+      var midEdgeX = x0 + nx * upperNetBand;
+      var midEdgeY = y0 + ny * upperNetBand;
+      var innerEdgeX = x0 + nx * totalWallBand;
+      var innerEdgeY = y0 + ny * totalWallBand;
+      var dx = x1 - x0, dy = y1 - y0;
 
-      g.lineWidth = Math.max(0.7, lw * 0.65);
-      for (var k = 0; k < steps; k++) {
-        var t0 = k / steps, t1 = (k + 1) / steps;
-        var ax = x0 + (x1 - x0) * t0, ay = y0 + (y1 - y0) * t0;
-        var bx = x0 + (x1 - x0) * t1, by = y0 + (y1 - y0) * t1;
-        g.beginPath();
-        g.moveTo(ax, ay); g.lineTo(bx + nx * fenceBand, by + ny * fenceBand);
-        g.moveTo(bx, by); g.lineTo(ax + nx * fenceBand, ay + ny * fenceBand);
-        g.stroke();
-      }
-
-      g.fillStyle = topNetCol;
+      // Upper red netting band (outer edge)
+      g.fillStyle = upperRedNetCol;
       g.beginPath();
       g.moveTo(x0, y0);
       g.lineTo(x1, y1);
-      g.lineTo(x1 + nx * topBand, y1 + ny * topBand);
-      g.lineTo(x0 + nx * topBand, y0 + ny * topBand);
+      g.lineTo(midEdgeX + dx, midEdgeY + dy);
+      g.lineTo(midEdgeX, midEdgeY);
       g.closePath();
       g.fill();
 
-      g.strokeStyle = topNetCol;
-      g.lineWidth = Math.max(0.8, lw * 0.7);
-      for (var m = 0; m < steps * 2; m++) {
-        var u0 = m / (steps * 2), u1 = (m + 1) / (steps * 2);
-        var px0 = x0 + (x1 - x0) * u0, py0 = y0 + (y1 - y0) * u0;
-        var px1 = x0 + (x1 - x0) * u1, py1 = y0 + (y1 - y0) * u1;
+      // Lower chain-link mesh band (inner to upper net)
+      g.fillStyle = 'rgba(148,163,184,0.14)';
+      g.beginPath();
+      g.moveTo(midEdgeX, midEdgeY);
+      g.lineTo(midEdgeX + dx, midEdgeY + dy);
+      g.lineTo(innerEdgeX + dx, innerEdgeY + dy);
+      g.lineTo(innerEdgeX, innerEdgeY);
+      g.closePath();
+      g.fill();
+
+      // Fine red mesh lines on upper band
+      var redSteps = Math.max(6, Math.round(segLen / Math.max(3, upperNetBand * 0.65)));
+      g.strokeStyle = upperRedNetCol;
+      g.lineWidth = Math.max(0.7, lw * 0.6);
+      for (var m = 0; m < redSteps; m++) {
+        var u0 = m / redSteps, u1 = (m + 1) / redSteps;
+        var ux0 = x0 + dx * u0, uy0 = y0 + dy * u0;
+        var ux1 = x0 + dx * u1, uy1 = y0 + dy * u1;
         g.beginPath();
-        g.moveTo(px0, py0); g.lineTo(px1 + nx * topBand, py1 + ny * topBand);
-        g.moveTo(px1, py1); g.lineTo(px0 + nx * topBand, py0 + ny * topBand);
+        g.moveTo(ux0, uy0); g.lineTo(ux1 + nx * upperNetBand, uy1 + ny * upperNetBand);
+        g.moveTo(ux1, uy1); g.lineTo(ux0 + nx * upperNetBand, uy0 + ny * upperNetBand);
         g.stroke();
+      }
+
+      // Chain-link diamond weave on lower band
+      var meshSteps = Math.max(5, Math.round(segLen / Math.max(4, lowerFenceBand * 0.5)));
+      g.strokeStyle = lowerMeshCol;
+      g.lineWidth = Math.max(0.7, lw * 0.65);
+      for (var k = 0; k < meshSteps; k++) {
+        var t0 = k / meshSteps, t1 = (k + 1) / meshSteps;
+        var ax = midEdgeX + dx * t0, ay = midEdgeY + dy * t0;
+        var bx = midEdgeX + dx * t1, by = midEdgeY + dy * t1;
+        g.beginPath();
+        g.moveTo(ax, ay); g.lineTo(bx + nx * lowerFenceBand, by + ny * lowerFenceBand);
+        g.moveTo(bx, by); g.lineTo(ax + nx * lowerFenceBand, ay + ny * lowerFenceBand);
+        g.stroke();
+      }
+
+      // Top & bottom rail lines
+      g.strokeStyle = postCol;
+      g.lineWidth = Math.max(1, lw * 0.85);
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      g.beginPath(); g.moveTo(innerEdgeX, innerEdgeY); g.lineTo(innerEdgeX + dx, innerEdgeY + dy); g.stroke();
+
+      // Vertical support posts along side
+      var postCount = Math.max(2, Math.round(segLen / Math.max(18, Math.min(cw, ch) * 0.24)));
+      var postR = Math.max(1.4, lw * 1.15);
+      for (var p = 0; p <= postCount; p++) {
+        var pt = p / postCount;
+        var px = x0 + dx * pt, py = y0 + dy * pt;
+        g.fillStyle = postCol;
+        g.beginPath();
+        g.arc(px, py, postR, 0, Math.PI * 2);
+        g.fill();
       }
     }
 
-    drawMeshEdge(0, 0, cw, 0, 0, 1);
-    drawMeshEdge(cw, 0, cw, ch, -1, 0);
-    drawMeshEdge(cw, ch, 0, ch, 0, -1);
-    drawMeshEdge(0, ch, 0, 0, 1, 0);
+    drawPerimeterSide(0, 0, cw, 0, 0, 1);
+    drawPerimeterSide(cw, 0, cw, ch, -1, 0);
+    drawPerimeterSide(cw, ch, 0, ch, 0, -1);
+    drawPerimeterSide(0, ch, 0, 0, 1, 0);
 
     return c.toDataURL('image/png');
   }
