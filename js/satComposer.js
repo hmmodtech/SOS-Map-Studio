@@ -1621,6 +1621,50 @@ window.SOS = window.SOS || {};
       draw();
     }, { passive: false });
   }
+  function onKeyDown(e) {
+    if (!isOpen) return;
+    var tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.key === ' ') { space = true; e.preventDefault(); return; }
+    if (e.key === 'Escape') {
+      calibDraft = { p1: null, p2: null };
+      measPts = [];
+      cutPts = [];
+      cloneCfg.pickMode = false;
+      setTool('select');
+      syncUI(); draw(); return;
+    }
+    if (tool === 'cutout' || tool === 'poly_draw') {
+      if (e.key === 'Backspace' && cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
+      if (e.key === 'Enter' && cutPts.length >= 3) {
+        e.preventDefault();
+        if (tool === 'poly_draw') finalizeFreePolygon();
+        else extractCutoutFromBase();
+        return;
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      e.preventDefault(); doRedo(); return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+      if (getSelAsset()) { e.preventDefault(); duplicateSelectedAsset(); } return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (getSelPin() && tool === 'pin') {
+        e.preventDefault();
+        pushUndo();
+        doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; });
+        selPinId = null; persistToIDB(); syncUI(); draw();
+      } else if (getSelAsset()) {
+        e.preventDefault(); deleteSelectedAsset();
+      }
+    }
+  }
+
+  function onKeyUp(e) { if (e.key === ' ') space = false; }
   // =========================================================================
   // UI BUILD & SYNC (CYBER HUD + DAYLIGHT DESIGN MODE COMPATIBLE)
   // =========================================================================
