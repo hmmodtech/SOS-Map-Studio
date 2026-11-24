@@ -51,6 +51,7 @@ window.SOS = window.SOS || {};
 
   // 1. Un-grassed Futsal Pitch + Chain-Link Fence + Red Top Netting
  // 1. Un-grassed Futsal Pitch + Lower Chain-Link + Upper Red Netting + Posts
+ // 1. Naturalistic Satellite-Blended Un-grassed Futsal Pitch + Chain-Link + Light Red Top Net
   function renderFutsalAssetCanvas(opts) {
     var wPx = Math.max(32, Math.round(opts.wPx || 240));
     var hPx = Math.max(24, Math.round(opts.hPx || 144));
@@ -63,48 +64,71 @@ window.SOS = window.SOS || {};
     var g = c.getContext('2d');
     var rand = seededRandom(90210);
 
-    var soilCol = opts.soilColor || '#c5a267';
-    var lineCol = opts.lineColor || 'rgba(248,250,252,0.48)';
-    var postCol = opts.postColor || '#64748b';
-    var lowerMeshCol = opts.fenceColor || 'rgba(100,116,139,0.68)';
-    var upperRedNetCol = opts.topNetColor || 'rgba(185,48,38,0.68)';
+    // Warm sandy ground tones blended for aerial realism
+    var soilCol = opts.soilColor || '#bfa06e';
+    var lineCol = opts.lineColor || 'rgba(245,242,235,0.24)';
+    var postCol = opts.postColor || 'rgba(71,85,105,0.75)';
+    var lowerMeshCol = opts.fenceColor || 'rgba(100,116,139,0.42)';
+    var upperRedNetCol = opts.topNetColor || 'rgba(185,48,38,0.36)';
 
-    var upperNetBand = Math.max(3, Math.round(Math.min(cw, ch) * 0.045));
-    var lowerFenceBand = Math.max(5, Math.round(Math.min(cw, ch) * 0.065));
+    var upperNetBand = Math.max(2, Math.round(Math.min(cw, ch) * 0.032));
+    var lowerFenceBand = Math.max(4, Math.round(Math.min(cw, ch) * 0.052));
     var totalWallBand = upperNetBand + lowerFenceBand;
 
-    // 1. Compacted sandy/earth court surface (un-grassed)
+    // 1. Base compacted earth with organic patches & wear variation
     g.fillStyle = soilCol;
     g.fillRect(0, 0, cw, ch);
 
-    var specks = Math.min(2000, Math.floor((cw * ch) / 85));
-    for (var i = 0; i < specks; i++) {
-      var rx = rand() * cw, ry = rand() * ch;
-      g.fillStyle = (i % 2 === 0) ? 'rgba(65,45,20,0.08)' : 'rgba(255,246,220,0.09)';
-      g.fillRect(rx, ry, 2, 2);
+    var blotches = Math.min(45, Math.max(12, Math.floor((cw * ch) / 2200)));
+    for (var b = 0; b < blotches; b++) {
+      var bx = rand() * cw;
+      var by = rand() * ch;
+      var br = Math.max(8, Math.min(cw, ch) * (0.08 + rand() * 0.14));
+      var grd = g.createRadialGradient(bx, by, br * 0.1, bx, by, br);
+      if (b % 2 === 0) {
+        grd.addColorStop(0, 'rgba(120,92,54,0.11)');
+        grd.addColorStop(1, 'rgba(120,92,54,0)');
+      } else {
+        grd.addColorStop(0, 'rgba(236,220,188,0.10)');
+        grd.addColorStop(1, 'rgba(236,220,188,0)');
+      }
+      g.fillStyle = grd;
+      g.beginPath();
+      g.arc(bx, by, br, 0, Math.PI * 2);
+      g.fill();
     }
 
-    // 2. Subtle court pitch lines inside perimeter
-    var padX = totalWallBand + Math.max(4, cw * 0.03);
-    var padY = totalWallBand + Math.max(4, ch * 0.04);
+    var specks = Math.min(2400, Math.floor((cw * ch) / 70));
+    for (var i = 0; i < specks; i++) {
+      var rx = rand() * cw, ry = rand() * ch;
+      g.fillStyle = (i % 2 === 0) ? 'rgba(55,40,20,0.07)' : 'rgba(255,248,232,0.07)';
+      g.fillRect(rx, ry, 1.5, 1.5);
+    }
+
+    // 2. Faded/weathered court lines (subtle like real aerial photography)
+    var padX = totalWallBand + Math.max(4, cw * 0.035);
+    var padY = totalWallBand + Math.max(4, ch * 0.045);
     var fw = Math.max(12, cw - padX * 2);
     var fh = Math.max(10, ch - padY * 2);
-    var lw = Math.max(1.2, Math.min(cw, ch) * 0.01);
+    var lw = Math.max(1, Math.min(cw, ch) * 0.0075);
 
+    g.save();
     g.strokeStyle = lineCol;
     g.lineWidth = lw;
+    g.setLineDash([Math.max(4, fw * 0.025), Math.max(1.5, fw * 0.006)]);
     g.strokeRect(padX, padY, fw, fh);
 
     var midX = padX + fw / 2, midY = padY + fh / 2;
     g.beginPath(); g.moveTo(midX, padY); g.lineTo(midX, padY + fh); g.stroke();
-    var cRad = Math.max(4, Math.min(fw, fh) * 0.16);
+    var cRad = Math.max(4, Math.min(fw, fh) * 0.15);
     g.beginPath(); g.arc(midX, midY, cRad, 0, Math.PI * 2); g.stroke();
 
-    var penW = fw * 0.15, penH = fh * 0.52;
+    var penW = fw * 0.14, penH = fh * 0.5;
     g.strokeRect(padX, midY - penH / 2, penW, penH);
     g.strokeRect(padX + fw - penW, midY - penH / 2, penW, penH);
+    g.restore();
 
-    // 3. Perimeter upper red safety net + lower chain-link fence + vertical steel posts
+    // 3. Perimeter upper red net + lower chain-link + posts
     function drawPerimeterSide(x0, y0, x1, y1, nx, ny) {
       var segLen = Math.hypot(x1 - x0, y1 - y0);
       if (segLen < 2) return;
@@ -114,6 +138,65 @@ window.SOS = window.SOS || {};
       var innerEdgeX = x0 + nx * totalWallBand;
       var innerEdgeY = y0 + ny * totalWallBand;
       var dx = x1 - x0, dy = y1 - y0;
+
+      g.fillStyle = 'rgba(185,48,38,0.12)';
+      g.beginPath();
+      g.moveTo(x0, y0);
+      g.lineTo(x1, y1);
+      g.lineTo(midEdgeX + dx, midEdgeY + dy);
+      g.lineTo(midEdgeX, midEdgeY);
+      g.closePath();
+      g.fill();
+
+      var redSteps = Math.max(4, Math.round(segLen / Math.max(5, upperNetBand * 1.1)));
+      g.strokeStyle = upperRedNetCol;
+      g.lineWidth = Math.max(0.65, lw * 0.65);
+      for (var m = 0; m < redSteps; m++) {
+        var u0 = m / redSteps, u1 = (m + 1) / redSteps;
+        var ux0 = x0 + dx * u0, uy0 = y0 + dy * u0;
+        var ux1 = x0 + dx * u1, uy1 = y0 + dy * u1;
+        g.beginPath();
+        g.moveTo(ux0, uy0); g.lineTo(ux1 + nx * upperNetBand, uy1 + ny * upperNetBand);
+        g.moveTo(ux1, uy1); g.lineTo(ux0 + nx * upperNetBand, uy0 + ny * upperNetBand);
+        g.stroke();
+      }
+
+      var meshSteps = Math.max(4, Math.round(segLen / Math.max(5, lowerFenceBand * 0.65)));
+      g.strokeStyle = lowerMeshCol;
+      g.lineWidth = Math.max(0.65, lw * 0.6);
+      for (var k = 0; k < meshSteps; k++) {
+        var t0 = k / meshSteps, t1 = (k + 1) / meshSteps;
+        var ax = midEdgeX + dx * t0, ay = midEdgeY + dy * t0;
+        var bx = midEdgeX + dx * t1, by = midEdgeY + dy * t1;
+        g.beginPath();
+        g.moveTo(ax, ay); g.lineTo(bx + nx * lowerFenceBand, by + ny * lowerFenceBand);
+        g.moveTo(bx, by); g.lineTo(ax + nx * lowerFenceBand, ay + ny * lowerFenceBand);
+        g.stroke();
+      }
+
+      g.strokeStyle = postCol;
+      g.lineWidth = Math.max(0.9, lw * 0.8);
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+
+      var postCount = Math.max(2, Math.round(segLen / Math.max(22, Math.min(cw, ch) * 0.28)));
+      var postR = Math.max(1.2, lw * 1.1);
+      for (var p = 0; p <= postCount; p++) {
+        var pt = p / postCount;
+        var px = x0 + dx * pt, py = y0 + dy * pt;
+        g.fillStyle = postCol;
+        g.beginPath();
+        g.arc(px, py, postR, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+
+    drawPerimeterSide(0, 0, cw, 0, 0, 1);
+    drawPerimeterSide(cw, 0, cw, ch, -1, 0);
+    drawPerimeterSide(cw, ch, 0, ch, 0, -1);
+    drawPerimeterSide(0, ch, 0, 0, 1, 0);
+
+    return c.toDataURL('image/png');
+  }
 
       // Upper red netting band (outer edge)
       g.fillStyle = upperRedNetCol;
