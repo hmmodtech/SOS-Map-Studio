@@ -7,7 +7,19 @@ window.SOS = window.SOS || {};
   var IDB_NAME = 'aj_geocad_sat_idb_v1';
   var IDB_STORE = 'kv';
   var MAX_SAFE_EDGE = 16384;
+  var MAX_LIVE_CACHE_EDGE = 4096;
   var MAX_UNDO = 40;
+  var D = Math.PI / 180;
+
+  function uid(p) {
+    return p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
 
   function blankDoc() {
     return {
@@ -22,8 +34,9 @@ window.SOS = window.SOS || {};
       },
       sun: { azimuthDeg: 135, lengthFactor: 0.75, opacity: 0.38, blurPx: 4, color: '#0f172a' },
       cleanupImage: { id: null, name: '', width: 0, height: 0 },
-      patches: [],
-      assets: [],
+      patches: [],       // { id, sx, sy, dx, dy, r, feather, opacity, rotDeg }
+      cleanupErases: [], // { id, r, feather, opacity, pts:[{x,y}] }
+      assets: [],        // { id, binId, name, source, naturalW, naturalH, x, y, wPx, hPx, lockAspect, rotationDeg, flipX, flipY, opacity, visible, locked, elevationM, shadowEnabled, filters }
       overlays: { titleAr: '', titleEn: '', showNorth: true, showScale: true, showLegend: true, northDeg: 0, pins: [] }
     };
   }
@@ -32,29 +45,40 @@ window.SOS = window.SOS || {};
     return { base: null, cleanup: null, assets: {} };
   }
 
-  // Isolated internal state (never stored in St.project or localStorage)
+  // Isolated module state (never leaks into St.project or localStorage)
   var doc = blankDoc();
   var bins = blankBins();
   var imgs = { base: null, cleanup: null, assets: {} };
   var undoStack = [], redoStack = [];
-  var opGen = 0; // Generation token prevents async IDB race conditions
+  var opGen = 0;
   var idbQueue = Promise.resolve();
   var idbStatus = 'Ready';
 
-  // UI & Viewport runtime state
+  // Offscreen cache for Layer 02_Ground_Cleanup (fast interactive redraw)
+  var cleanupCacheCv = null;
+  var cleanupCacheScale = 1;
+  var cleanupDirty = true;
+  var patchScratchCv = null;
+
+  // Viewport & Tool runtime state
   var ov = null, cv = null, ctx = null, built = false, isOpen = false;
   var W = 1, H = 1, dpr = 1;
   var view = { s: 1, ox: 0, oy: 0 };
-  var tool = 'pan'; // 'pan' | 'calibrate' | 'measure'
+  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'calibrate' | 'measure'
+  var selAssetId = null;
   var ptrs = {}, drag = null, space = false;
-  var hovImg = null; // { x, y } in natural base pixels
+  var hovImg = null;
   var calibDraft = { p1: null, p2: null };
   var measPts = [];
+  var cutPts = [];
+  var cutFeatherPx = 2;
+  var cloneCfg = { src: null, pickMode: false, radius: 28, feather: 0.65, opacity: 1.0, rotDeg: 0, followDrag: true };
+  var eraseCfg = { radius: 28, feather: 0.65, opacity: 1.0 };
   var statusMsg = 'Import a full-resolution satellite image to begin.';
   var statusErr = false;
 
   // =========================================================================
-  // FAIL-SAFE SERIALIZED INDEXEDDB STORAGE
+  // SERIALIZED FAIL-SAFE INDEXEDDB STORAGE
   // =========================================================================
   function openIDB() {
     return new Promise(function (res, rej) {
@@ -135,15 +159,16 @@ window.SOS = window.SOS || {};
             var rDoc = st.get('doc'), rBin = st.get('bins');
             tx.oncomplete = function () {
               db.close();
-              if (snapGen !== opGen) return res(); // Ignore stale startup read
+              if (snapGen !== opGen) return res();
               if (rDoc.result) doc = mergeDoc(rDoc.result);
               if (rBin.result) bins = {
                 base: rBin.result.base || null,
                 cleanup: rBin.result.cleanup || null,
-                assets: rBin.result.assets || {}
+                assets: rBin.result.assets ? Object.assign({}, rBin.result.assets) : {}
               };
-              decodeAllImages(function () {
+              decodeAllImages(snapGen, function () {
                 if (snapGen !== opGen) return;
+                cleanupDirty = true;
                 setIdbBadge(bins.base ? 'Restored' : 'Ready');
                 if (isOpen) { fitView(); syncUI(); draw(); }
               });
@@ -159,8 +184,35 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // STATE MERGE, INTERNAL UNDO/REDO & IMAGE DECODING
+  // STATE MERGE, UNDO/REDO & MULTI-IMAGE DECODING
   // =========================================================================
+  function normalizeAsset(a) {
+    return Object.assign({
+      id: uid('ast'),
+      binId: '',
+      name: 'Asset',
+      source: 'png',
+      naturalW: 100,
+      naturalH: 100,
+      x: 100,
+      y: 100,
+      wPx: 100,
+      hPx: 100,
+      lockAspect: true,
+      rotationDeg: 0,
+      flipX: false,
+      flipY: false,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      elevationM: 2.5,
+      shadowEnabled: true,
+      filters: { brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }
+    }, a || {}, {
+      filters: Object.assign({ brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }, (a && a.filters) || {})
+    });
+  }
+
   function mergeDoc(raw) {
     var b = blankDoc();
     if (!raw || typeof raw !== 'object') return b;
@@ -177,7 +229,8 @@ window.SOS = window.SOS || {};
       sun: Object.assign(b.sun, raw.sun || {}),
       cleanupImage: Object.assign(b.cleanupImage, raw.cleanupImage || {}),
       patches: Array.isArray(raw.patches) ? raw.patches : [],
-      assets: Array.isArray(raw.assets) ? raw.assets : [],
+      cleanupErases: Array.isArray(raw.cleanupErases) ? raw.cleanupErases : [],
+      assets: Array.isArray(raw.assets) ? raw.assets.map(normalizeAsset) : [],
       overlays: Object.assign(b.overlays, raw.overlays || {})
     };
   }
@@ -193,7 +246,9 @@ window.SOS = window.SOS || {};
     if (!undoStack.length) return;
     redoStack.push(JSON.stringify(doc));
     doc = mergeDoc(JSON.parse(undoStack.pop()));
+    if (selAssetId && !getSelAsset()) selAssetId = null;
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
+    cleanupDirty = true;
     persistToIDB();
     syncUI(); draw();
   }
@@ -202,7 +257,9 @@ window.SOS = window.SOS || {};
     if (!redoStack.length) return;
     undoStack.push(JSON.stringify(doc));
     doc = mergeDoc(JSON.parse(redoStack.pop()));
+    if (selAssetId && !getSelAsset()) selAssetId = null;
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
+    cleanupDirty = true;
     persistToIDB();
     syncUI(); draw();
   }
@@ -211,21 +268,40 @@ window.SOS = window.SOS || {};
     if (!dataUrl) return cb(null, null);
     var im = new Image();
     im.onload = function () { cb(null, im); };
-    im.onerror = function () { cb(new Error('Failed to decode image data'), null); };
+    im.onerror = function () { cb(new Error('Image decode failed'), null); };
     im.src = dataUrl;
   }
 
-  function decodeAllImages(done) {
+  function decodeAllImages(snapGen, done) {
     imgs.base = null;
     imgs.cleanup = null;
     imgs.assets = {};
-    decodeImage(bins.base, function (err, im) {
-      if (!err && im) {
-        imgs.base = im;
-        doc.base.width = im.naturalWidth;
-        doc.base.height = im.naturalHeight;
-      }
-      if (done) done();
+    var tasks = [];
+    if (bins.base) tasks.push({ kind: 'base', data: bins.base });
+    if (bins.cleanup) tasks.push({ kind: 'cleanup', data: bins.cleanup });
+    Object.keys(bins.assets || {}).forEach(function (k) {
+      if (bins.assets[k]) tasks.push({ kind: 'asset', id: k, data: bins.assets[k] });
+    });
+    if (!tasks.length) { if (done) done(); return; }
+    var left = tasks.length;
+    tasks.forEach(function (t) {
+      decodeImage(t.data, function (err, im) {
+        if (snapGen === opGen && !err && im) {
+          if (t.kind === 'base') {
+            imgs.base = im;
+            doc.base.width = im.naturalWidth;
+            doc.base.height = im.naturalHeight;
+          } else if (t.kind === 'cleanup') {
+            imgs.cleanup = im;
+            doc.cleanupImage.width = im.naturalWidth;
+            doc.cleanupImage.height = im.naturalHeight;
+          } else if (t.kind === 'asset') {
+            imgs.assets[t.id] = im;
+          }
+        }
+        left--;
+        if (left <= 0 && done) done();
+      });
     });
   }
 
@@ -241,28 +317,34 @@ window.SOS = window.SOS || {};
     }
   }
 
+  function getSelAsset() {
+    for (var i = 0; i < doc.assets.length; i++) {
+      if (doc.assets[i].id === selAssetId) return doc.assets[i];
+    }
+    return null;
+  }
+
   // =========================================================================
-  // ZERO-COMPRESSION BASE IMAGE IMPORT
+  // IMPORTS: BASE SATELLITE, PRE-CLEANED GROUND, PNG ASSETS
   // =========================================================================
   function importBaseFile(file) {
     if (!file) return;
     try {
       setStatus('Reading full-resolution image: ' + file.name + '...', false);
       var reader = new FileReader();
-      reader.onerror = function () { setStatus('Error reading file: ' + (reader.error ? reader.error.message : 'Unknown'), true); };
+      reader.onerror = function () { setStatus('Error reading file.', true); };
       reader.onload = function () {
         try {
           var dataUrl = reader.result;
           decodeImage(dataUrl, function (err, im) {
-            if (err || !im) { setStatus('Unsupported or corrupted image file.', true); return; }
+            if (err || !im || !im.naturalWidth) { setStatus('Unsupported or corrupted image file.', true); return; }
             var nw = im.naturalWidth, nh = im.naturalHeight;
-            if (!nw || !nh) { setStatus('Image has zero dimensions.', true); return; }
             opGen++;
             pushUndo();
             bins.base = dataUrl;
             imgs.base = im;
             doc.base = {
-              id: 'base_' + Date.now().toString(36),
+              id: uid('base'),
               name: file.name,
               mime: file.type || 'image/png',
               width: nw,
@@ -271,12 +353,15 @@ window.SOS = window.SOS || {};
             };
             calibDraft = { p1: null, p2: null };
             measPts = [];
+            cutPts = [];
+            cloneCfg.src = null;
+            cleanupDirty = true;
             var mp = (nw * nh) / 1e6;
             var mb = doc.base.byteSize / (1024 * 1024);
             var warn = (nw > MAX_SAFE_EDGE || nh > MAX_SAFE_EDGE)
-              ? (' [WARNING: Edge exceeds ' + MAX_SAFE_EDGE + 'px browser safe limit!]')
+              ? (' [WARNING: Edge exceeds ' + MAX_SAFE_EDGE + 'px safe browser limit!]')
               : '';
-            setStatus('Loaded 01_Base_Satellite: ' + nw + 'x' + nh + ' px (' + mp.toFixed(1) + ' MP, ' + mb.toFixed(1) + ' MB) — Zero Compression' + warn, !!warn);
+            setStatus('Loaded 01_Base_Satellite: ' + nw + 'x' + nh + ' px (' + mp.toFixed(2) + ' MP, ' + mb.toFixed(2) + ' MB) — Zero Compression' + warn, !!warn);
             persistToIDB();
             fitView();
             syncUI();
@@ -292,10 +377,361 @@ window.SOS = window.SOS || {};
     }
   }
 
+  function importCleanupFile(file) {
+    if (!file) return;
+    if (!imgs.base) { setStatus('Import 01_Base_Satellite first before loading a cleanup layer.', true); return; }
+    try {
+      var reader = new FileReader();
+      reader.onerror = function () { setStatus('Error reading cleanup image.', true); };
+      reader.onload = function () {
+        var dataUrl = reader.result;
+        decodeImage(dataUrl, function (err, im) {
+          if (err || !im || !im.naturalWidth) { setStatus('Invalid cleanup image.', true); return; }
+          pushUndo();
+          bins.cleanup = dataUrl;
+          imgs.cleanup = im;
+          doc.cleanupImage = { id: uid('cln'), name: file.name, width: im.naturalWidth, height: im.naturalHeight };
+          doc.layers.cleanup.visible = true;
+          cleanupDirty = true;
+          persistToIDB();
+          var dimNote = (im.naturalWidth === imgs.base.naturalWidth && im.naturalHeight === imgs.base.naturalHeight)
+            ? 'exact 1:1 match'
+            : ('auto-fitted 1:1 onto ' + imgs.base.naturalWidth + 'x' + imgs.base.naturalHeight);
+          setStatus('Loaded 02_Ground_Cleanup: ' + file.name + ' (' + dimNote + '). Use Soft Eraser to reveal original base where needed.', false);
+          syncUI(); draw();
+        });
+      };
+      reader.readAsDataURL(file);
+    } catch (e) {
+      setStatus('Cleanup import failed: ' + e.message, true);
+    }
+  }
+
+  function importAssetFiles(fileList) {
+    if (!fileList || !fileList.length) return;
+    if (!imgs.base) { setStatus('Import 01_Base_Satellite first before adding assets.', true); return; }
+    var files = [].slice.call(fileList);
+    var loaded = 0;
+    pushUndo();
+    files.forEach(function (file, idx) {
+      try {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var dataUrl = reader.result;
+          decodeImage(dataUrl, function (err, im) {
+            if (err || !im || !im.naturalWidth) return;
+            var binId = uid('abin');
+            bins.assets[binId] = dataUrl;
+            imgs.assets[binId] = im;
+            var ctr = s2i(W / 2, H / 2);
+            ctr.x = clamp(ctr.x, 0, imgs.base.naturalWidth) + idx * 18;
+            ctr.y = clamp(ctr.y, 0, imgs.base.naturalHeight) + idx * 18;
+            var asp = im.naturalWidth / Math.max(1, im.naturalHeight);
+            var wPx;
+            if (doc.calibration.pxPerMeter > 0) {
+              wPx = clamp(12 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.4);
+            } else {
+              wPx = clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.28);
+            }
+            var hPx = wPx / asp;
+            var cleanName = file.name.replace(/\.[^.]+$/, '');
+            var ast = normalizeAsset({
+              id: uid('ast'),
+              binId: binId,
+              name: cleanName || 'PNG Asset',
+              source: 'png',
+              naturalW: im.naturalWidth,
+              naturalH: im.naturalHeight,
+              x: +ctr.x.toFixed(2),
+              y: +ctr.y.toFixed(2),
+              wPx: +wPx.toFixed(2),
+              hPx: +hPx.toFixed(2)
+            });
+            doc.assets.push(ast);
+            doc.layers.assets.visible = true;
+            selAssetId = ast.id;
+            loaded++;
+            if (loaded === files.length) {
+              persistToIDB();
+              setTool('select');
+              setStatus('Added ' + loaded + ' PNG asset(s) to 03_Movable_Assets. Drag corners to resize or top handle to rotate.', false);
+              syncUI(); draw();
+            }
+          });
+        };
+        reader.readAsDataURL(file);
+      } catch (e) {
+        setStatus('Asset import error: ' + e.message, true);
+      }
+    });
+  }
+
   // =========================================================================
-  // VIEWPORT PROJECTION & NAVIGATION (NATURAL 1:1 IMAGE COORDINATES)
+  // CUT & RELOCATE (A -> B): EXACT 1:1 NATURAL PIXEL EXTRACTION
   // =========================================================================
-  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function extractCutoutFromBase() {
+    if (!imgs.base) { setStatus('No base satellite image loaded.', true); return; }
+    if (cutPts.length < 3) { setStatus('Draw at least 3 polygon points around the object first.', true); return; }
+    var cutCv = null, maskCv = null;
+    try {
+      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      cutPts.forEach(function (p) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      });
+      var fPx = clamp(+cutFeatherPx || 0, 0, 6);
+      var pad = Math.ceil(fPx * 2) + 2;
+      var x0 = Math.max(0, Math.floor(minX - pad));
+      var y0 = Math.max(0, Math.floor(minY - pad));
+      var x1 = Math.min(iw, Math.ceil(maxX + pad));
+      var y1 = Math.min(ih, Math.ceil(maxY + pad));
+      var bw = x1 - x0, bh = y1 - y0;
+      if (bw < 4 || bh < 4) { setStatus('Cutout polygon is too small.', true); return; }
+      if (bw > MAX_SAFE_EDGE || bh > MAX_SAFE_EDGE) { setStatus('Cutout exceeds safe canvas edge limit.', true); return; }
+
+      // 1. Copy exact 1:1 natural pixels from 01_Base_Satellite
+      cutCv = document.createElement('canvas');
+      cutCv.width = bw; cutCv.height = bh;
+      var cctx = cutCv.getContext('2d');
+      cctx.drawImage(imgs.base, x0, y0, bw, bh, 0, 0, bw, bh);
+
+      // 2. Build 1:1 alpha mask (with optional soft edge feathering)
+      maskCv = document.createElement('canvas');
+      maskCv.width = bw; maskCv.height = bh;
+      var mctx = maskCv.getContext('2d');
+      mctx.beginPath();
+      cutPts.forEach(function (p, i) {
+        var lx = p.x - x0, ly = p.y - y0;
+        if (i === 0) mctx.moveTo(lx, ly); else mctx.lineTo(lx, ly);
+      });
+      mctx.closePath();
+      if (fPx > 0 && 'filter' in mctx) mctx.filter = 'blur(' + fPx + 'px)';
+      mctx.fillStyle = '#ffffff';
+      mctx.fill();
+      mctx.filter = 'none';
+
+      // 3. Apply mask onto 1:1 crop
+      cctx.globalCompositeOperation = 'destination-in';
+      cctx.drawImage(maskCv, 0, 0);
+      cctx.globalCompositeOperation = 'source-over';
+
+      var pngUrl = cutCv.toDataURL('image/png');
+      // Release temporary canvases immediately
+      cutCv.width = 0; cutCv.height = 0;
+      maskCv.width = 0; maskCv.height = 0;
+
+      decodeImage(pngUrl, function (err, im) {
+        if (err || !im) { setStatus('Failed to decode extracted cutout.', true); return; }
+        pushUndo();
+        var binId = uid('cut');
+        bins.assets[binId] = pngUrl;
+        imgs.assets[binId] = im;
+        var cutCount = doc.assets.filter(function (a) { return a.source === 'cutout'; }).length + 1;
+        var ast = normalizeAsset({
+          id: uid('ast'),
+          binId: binId,
+          name: 'Cutout #' + cutCount + ' (A➔B)',
+          source: 'cutout',
+          naturalW: bw,
+          naturalH: bh,
+          x: +(x0 + bw / 2).toFixed(2),
+          y: +(y0 + bh / 2).toFixed(2),
+          wPx: bw,
+          hPx: bh
+        });
+        doc.assets.push(ast);
+        doc.layers.assets.visible = true;
+        selAssetId = ast.id;
+        cutPts = [];
+        persistToIDB();
+        setTool('select');
+        setStatus('Extracted 1:1 cutout (' + bw + 'x' + bh + ' px). Drag & rotate to Location B, then click "Clean Old Spot (A)" in Inspector.', false);
+        syncUI(); draw();
+      });
+    } catch (e) {
+      if (cutCv) { cutCv.width = 0; cutCv.height = 0; }
+      if (maskCv) { maskCv.width = 0; maskCv.height = 0; }
+      setStatus('Cutout extraction failed: ' + e.message, true);
+    }
+  }
+
+  // =========================================================================
+  // LAYER 02_GROUND_CLEANUP COMPOSITOR (PRE-CLEANED + CLONE PATCHES + ERASER)
+  // =========================================================================
+  function stampClonePatch(targetCtx, p, scale) {
+    if (!imgs.base) return;
+    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+    var r = Math.max(2, p.r * scale);
+    var d = Math.ceil(r * 2) + 2;
+    if (!patchScratchCv) patchScratchCv = document.createElement('canvas');
+    patchScratchCv.width = d;
+    patchScratchCv.height = d;
+    var pctx = patchScratchCv.getContext('2d');
+    pctx.clearRect(0, 0, d, d);
+
+    // Safe cropped source rect in 1:1 natural base image coordinates
+    var rrNat = Math.ceil(p.r * 1.5) + 2;
+    var bx0 = Math.max(0, Math.floor(p.sx - rrNat));
+    var by0 = Math.max(0, Math.floor(p.sy - rrNat));
+    var bx1 = Math.min(iw, Math.ceil(p.sx + rrNat));
+    var by1 = Math.min(ih, Math.ceil(p.sy + rrNat));
+    var bw = bx1 - bx0, bh = by1 - by0;
+    if (bw <= 0 || bh <= 0) return;
+
+    pctx.save();
+    pctx.translate(d / 2, d / 2);
+    if (p.rotDeg) pctx.rotate(p.rotDeg * D);
+    pctx.drawImage(imgs.base, bx0, by0, bw, bh, (bx0 - p.sx) * scale, (by0 - p.sy) * scale, bw * scale, bh * scale);
+    pctx.restore();
+
+    // Soft radial feather alpha mask
+    var fe = clamp(p.feather != null ? p.feather : 0.65, 0.02, 1);
+    var rIn = Math.max(0, r * (1 - fe));
+    var grad = pctx.createRadialGradient(d / 2, d / 2, rIn, d / 2, d / 2, r);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    pctx.globalCompositeOperation = 'destination-in';
+    pctx.fillStyle = grad;
+    pctx.fillRect(0, 0, d, d);
+    pctx.globalCompositeOperation = 'source-over';
+
+    targetCtx.save();
+    targetCtx.globalAlpha = clamp(p.opacity != null ? p.opacity : 1, 0.05, 1);
+    targetCtx.drawImage(patchScratchCv, p.dx * scale - d / 2, p.dy * scale - d / 2);
+    targetCtx.restore();
+  }
+
+  function applySoftEraseStroke(targetCtx, st, scale) {
+    if (!st || !st.pts || !st.pts.length) return;
+    var r = Math.max(2, st.r * scale);
+    var fe = clamp(st.feather != null ? st.feather : 0.65, 0.02, 1);
+    var rIn = Math.max(0, r * (1 - fe));
+    var op = clamp(st.opacity != null ? st.opacity : 1, 0.05, 1);
+    var step = Math.max(2, r * 0.26);
+
+    function dab(x, y) {
+      var g = targetCtx.createRadialGradient(x, y, rIn, x, y, r);
+      g.addColorStop(0, 'rgba(0,0,0,' + op + ')');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      targetCtx.fillStyle = g;
+      targetCtx.beginPath();
+      targetCtx.arc(x, y, r, 0, Math.PI * 2);
+      targetCtx.fill();
+    }
+
+    targetCtx.save();
+    targetCtx.globalCompositeOperation = 'destination-out';
+    var pts = st.pts;
+    dab(pts[0].x * scale, pts[0].y * scale);
+    for (var i = 1; i < pts.length; i++) {
+      var x0 = pts[i - 1].x * scale, y0 = pts[i - 1].y * scale;
+      var x1 = pts[i].x * scale, y1 = pts[i].y * scale;
+      var dist = Math.hypot(x1 - x0, y1 - y0);
+      var n = Math.max(1, Math.ceil(dist / step));
+      for (var k = 1; k <= n; k++) {
+        var t = k / n;
+        dab(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+      }
+    }
+    targetCtx.restore();
+  }
+
+  function renderCleanupLayerTo(targetCtx, targetW, targetH, scale) {
+    // 1. Pre-cleaned external ground image (fitted 1:1 to base bounds)
+    if (imgs.cleanup) {
+      targetCtx.drawImage(imgs.cleanup, 0, 0, targetW, targetH);
+    }
+    // 2. Procedural soft-feathered clone patches from 01_Base_Satellite
+    for (var i = 0; i < doc.patches.length; i++) {
+      stampClonePatch(targetCtx, doc.patches[i], scale);
+    }
+    // 3. Soft eraser strokes revealing 01_Base_Satellite underneath
+    for (var j = 0; j < doc.cleanupErases.length; j++) {
+      applySoftEraseStroke(targetCtx, doc.cleanupErases[j], scale);
+    }
+  }
+
+  function ensureCleanupCache() {
+    if (!imgs.base) return null;
+    if (!imgs.cleanup && !doc.patches.length && !doc.cleanupErases.length) {
+      if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
+      cleanupDirty = false;
+      return null;
+    }
+    if (!cleanupDirty && cleanupCacheCv) return cleanupCacheCv;
+    try {
+      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+      var sc = Math.min(1, MAX_LIVE_CACHE_EDGE / Math.max(iw, ih));
+      var cw = Math.max(1, Math.round(iw * sc)), ch = Math.max(1, Math.round(ih * sc));
+      if (!cleanupCacheCv) cleanupCacheCv = document.createElement('canvas');
+      if (cleanupCacheCv.width !== cw || cleanupCacheCv.height !== ch) {
+        cleanupCacheCv.width = cw; cleanupCacheCv.height = ch;
+      }
+      cleanupCacheScale = cw / iw;
+      var cctx = cleanupCacheCv.getContext('2d');
+      cctx.clearRect(0, 0, cw, ch);
+      renderCleanupLayerTo(cctx, cw, ch, cleanupCacheScale);
+      cleanupDirty = false;
+      return cleanupCacheCv;
+    } catch (e) {
+      setStatus('Cleanup layer cache error: ' + e.message, true);
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // ASSET GEOMETRY, HIT-TESTING & HANDLES (1:1 NATURAL PIXEL COORDS)
+  // =========================================================================
+  function assetLocalToImg(a, lx, ly) {
+    var r = (a.rotationDeg || 0) * D, c = Math.cos(r), s = Math.sin(r);
+    return { x: a.x + lx * c - ly * s, y: a.y + lx * s + ly * c };
+  }
+
+  function imgToAssetLocal(a, ix, iy) {
+    var r = (a.rotationDeg || 0) * D, c = Math.cos(r), s = Math.sin(r);
+    var dx = ix - a.x, dy = iy - a.y;
+    return { x: dx * c + dy * s, y: -dx * s + dy * c };
+  }
+
+  function assetHandlesImg(a) {
+    var hw = a.wPx / 2, hh = a.hPx / 2;
+    var rotStemImg = 26 / Math.max(0.05, view.s);
+    return {
+      tl: assetLocalToImg(a, -hw, -hh),
+      tr: assetLocalToImg(a, hw, -hh),
+      br: assetLocalToImg(a, hw, hh),
+      bl: assetLocalToImg(a, -hw, hh),
+      rot: assetLocalToImg(a, 0, -hh - rotStemImg),
+      topMid: assetLocalToImg(a, 0, -hh)
+    };
+  }
+
+  function hitAssetHandle(a, screenPt) {
+    if (!a || !a.visible || a.locked) return null;
+    var hs = assetHandlesImg(a);
+    var keys = ['rot', 'tl', 'tr', 'br', 'bl'];
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i], sp = i2s(hs[k].x, hs[k].y);
+      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 12) return k;
+    }
+    return null;
+  }
+
+  function hitAssetAt(imgPt) {
+    if (!doc.layers.assets.visible) return null;
+    for (var i = doc.assets.length - 1; i >= 0; i--) {
+      var a = doc.assets[i];
+      if (!a.visible || a.locked) continue;
+      var loc = imgToAssetLocal(a, imgPt.x, imgPt.y);
+      if (Math.abs(loc.x) <= a.wPx / 2 && Math.abs(loc.y) <= a.hPx / 2) return a;
+    }
+    return null;
+  }
+
+  // =========================================================================
+  // VIEWPORT PROJECTION & NAVIGATION
+  // =========================================================================
   function i2s(ix, iy) { return [view.ox + ix * view.s, view.oy + iy * view.s]; }
   function s2i(sx, sy) { return { x: (sx - view.ox) / view.s, y: (sy - view.oy) / view.s }; }
   function minScale() {
@@ -322,7 +758,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // RENDERER (PHASE 1: LAYER 01 + CALIBRATION + METRIC MEASURE + SCALE BAR)
+  // MAIN RENDERER (LAYERS 01 + 02 + 03 + INTERACTIVE OVERLAYS)
   // =========================================================================
   function draw() {
     if (!isOpen || !ctx) return;
@@ -338,18 +774,17 @@ window.SOS = window.SOS || {};
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('SAT STUDIO READY — IMPORT HIGH-RES SATELLITE IMAGE (01_Base_Satellite)', W / 2, H / 2 - 12);
         ctx.font = '11px ' + MONO;
-        ctx.fillText('Zero-Compression Base Layer • 1:1 Original Pixels • Isolated IndexedDB Draft', W / 2, H / 2 + 12);
+        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • PNG Assets • Cut & Relocate (1:1 A➔B)', W / 2, H / 2 + 12);
         return;
       }
 
       var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
       var tl = i2s(0, 0), dw = iw * view.s, dh = ih * view.s;
 
-      // Subtle checkerboard backdrop inside image bounds
       ctx.fillStyle = isDay ? '#cbd5e1' : '#0a1626';
       ctx.fillRect(tl[0], tl[1], dw, dh);
 
-      // Layer 01: Base Satellite (Zero-Compression)
+      // LAYER 01: Base Satellite (Zero-Compression)
       if (doc.layers.base.visible) {
         ctx.save();
         ctx.globalAlpha = clamp(doc.layers.base.opacity, 0, 1);
@@ -358,33 +793,180 @@ window.SOS = window.SOS || {};
         ctx.restore();
       }
 
-      // Image frame border
+      // LAYER 02: Ground Cleanup (Pre-cleaned image + Soft Clone Patches + Soft Eraser)
+      if (doc.layers.cleanup.visible) {
+        var ccv = ensureCleanupCache();
+        if (ccv) {
+          ctx.save();
+          ctx.globalAlpha = clamp(doc.layers.cleanup.opacity, 0, 1);
+          ctx.imageSmoothingEnabled = view.s < 2;
+          ctx.drawImage(ccv, tl[0], tl[1], dw, dh);
+          ctx.restore();
+        }
+      }
+
+      // LAYER 03: Movable Assets (PNGs & 1:1 Cutouts)
+      if (doc.layers.assets.visible) {
+        var layOp = clamp(doc.layers.assets.opacity, 0, 1);
+        for (var i = 0; i < doc.assets.length; i++) {
+          var a = doc.assets[i];
+          if (!a.visible) continue;
+          var im = imgs.assets[a.binId];
+          if (!im) continue;
+          var scPt = i2s(a.x, a.y);
+          ctx.save();
+          ctx.globalAlpha = layOp * clamp(a.opacity != null ? a.opacity : 1, 0, 1);
+          ctx.translate(scPt[0], scPt[1]);
+          if (a.rotationDeg) ctx.rotate(a.rotationDeg * D);
+          if (a.flipX || a.flipY) ctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(im, -a.wPx * view.s / 2, -a.hPx * view.s / 2, a.wPx * view.s, a.hPx * view.s);
+          ctx.restore();
+        }
+      }
+
+      // Base image boundary frame
       ctx.strokeStyle = isDay ? '#0369a1' : '#1b3b57';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(tl[0], tl[1], dw, dh);
 
-      // Calibration overlay (active draft or saved reference when tool === 'calibrate')
+      // Selected Asset Transform Gizmo
+      var sel = getSelAsset();
+      if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan')) {
+        drawAssetGizmo(sel);
+      }
+
+      // Active Tool Overlays
+      if (tool === 'clone') drawCloneOverlay();
+      if (tool === 'erase') drawEraserOverlay();
+      if (tool === 'cutout') drawCutoutOverlay();
+
       var cp1 = calibDraft.p1 || (tool === 'calibrate' ? doc.calibration.p1 : null);
       var cp2 = calibDraft.p2 || (tool === 'calibrate' ? doc.calibration.p2 : null);
-      if (tool === 'calibrate' && cp1) {
-        drawGuideSegment(cp1, cp2 || hovImg, '#00e5ff', 'CALIB');
-      }
+      if (tool === 'calibrate' && cp1) drawGuideSegment(cp1, cp2 || hovImg, '#00e5ff', 'CALIB');
+      if (tool === 'measure' && measPts.length >= 1) drawGuideSegment(measPts[0], measPts[1] || hovImg, '#f0c44d', 'MEAS');
 
-      // Measure tool overlay
-      if (tool === 'measure' && measPts.length >= 1) {
-        drawGuideSegment(measPts[0], measPts[1] || hovImg, '#f0c44d', 'MEAS');
-      }
-
-      // Metric Scale Bar (bottom-left) if calibrated
-      if (doc.calibration.pxPerMeter > 0) {
-        drawScaleBar(isDay);
-      }
-
-      // Live Zoom & Cursor HUD (top-left)
+      if (doc.calibration.pxPerMeter > 0) drawScaleBar(isDay);
       drawViewportHud(isDay);
     } catch (err) {
       setStatus('Render warning: ' + err.message, true);
     }
+  }
+
+  function drawAssetGizmo(a) {
+    var hs = assetHandlesImg(a);
+    var pts = [hs.tl, hs.tr, hs.br, hs.bl].map(function (p) { return i2s(p.x, p.y); });
+    var topM = i2s(hs.topMid.x, hs.topMid.y);
+    var rotP = i2s(hs.rot.x, hs.rot.y);
+
+    ctx.save();
+    ctx.strokeStyle = a.locked ? '#f0c44d' : '#00ff9d';
+    ctx.lineWidth = 1.8;
+    ctx.setLineDash(a.locked ? [5, 4] : []);
+    ctx.beginPath();
+    pts.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (!a.locked) {
+      // Rotation stem + handle
+      ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(topM[0], topM[1]); ctx.lineTo(rotP[0], rotP[1]); ctx.stroke();
+      ctx.beginPath(); ctx.arc(rotP[0], rotP[1], 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#040911'; ctx.fill(); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.stroke();
+
+      // 4 Corner resize squares
+      pts.forEach(function (p) {
+        ctx.fillStyle = '#040911'; ctx.strokeStyle = '#00ff9d'; ctx.lineWidth = 2;
+        ctx.fillRect(p[0] - 5, p[1] - 5, 10, 10);
+        ctx.strokeRect(p[0] - 5, p[1] - 5, 10, 10);
+      });
+    }
+
+    // Live dimension/angle tag
+    var dimTxt = a.name;
+    if (doc.calibration.pxPerMeter > 0) {
+      dimTxt += ' • ' + (a.wPx / doc.calibration.pxPerMeter).toFixed(1) + 'x' + (a.hPx / doc.calibration.pxPerMeter).toFixed(1) + ' m';
+    }
+    dimTxt += ' • ' + Math.round(a.rotationDeg || 0) + '°';
+    ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var tw = ctx.measureText(dimTxt).width + 12;
+    var bx = rotP[0], by = rotP[1] - 18;
+    ctx.fillStyle = 'rgba(4,9,17,0.9)'; ctx.fillRect(bx - tw / 2, by - 9, tw, 18);
+    ctx.strokeStyle = a.locked ? '#f0c44d' : '#00ff9d'; ctx.lineWidth = 1; ctx.strokeRect(bx - tw / 2, by - 9, tw, 18);
+    ctx.fillStyle = a.locked ? '#f0c44d' : '#00ff9d'; ctx.fillText(dimTxt, bx, by + 0.5);
+    ctx.restore();
+  }
+
+  function drawCloneOverlay() {
+    ctx.save();
+    if (cloneCfg.src) {
+      var ss = i2s(cloneCfg.src.x, cloneCfg.src.y);
+      ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(ss[0] - 9, ss[1]); ctx.lineTo(ss[0] + 9, ss[1]);
+      ctx.moveTo(ss[0], ss[1] - 9); ctx.lineTo(ss[0], ss[1] + 9);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(ss[0], ss[1], Math.max(4, cloneCfg.radius * view.s), 0, Math.PI * 2);
+      ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = 'bold 9px ' + MONO; ctx.fillStyle = '#00e5ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText('SRC', ss[0] + 8, ss[1] - 6);
+    }
+    if (hovImg) {
+      var hs = i2s(hovImg.x, hovImg.y);
+      var col = cloneCfg.pickMode ? '#00e5ff' : '#00ff9d';
+      ctx.strokeStyle = col; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, cloneCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke();
+      if (cloneCfg.src && !cloneCfg.pickMode) {
+        var s2 = i2s(cloneCfg.src.x, cloneCfg.src.y);
+        ctx.strokeStyle = 'rgba(0,229,255,0.45)'; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(s2[0], s2[1]); ctx.lineTo(hs[0], hs[1]); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawEraserOverlay() {
+    if (!hovImg) return;
+    var hs = i2s(hovImg.x, hovImg.y);
+    ctx.save();
+    ctx.strokeStyle = '#ff4757'; ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, eraseCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(2, eraseCfg.radius * (1 - eraseCfg.feather) * view.s), 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  function drawCutoutOverlay() {
+    if (!cutPts.length) return;
+    ctx.save();
+    var sp = cutPts.map(function (p) { return i2s(p.x, p.y); });
+    if (sp.length >= 3) {
+      ctx.fillStyle = 'rgba(0,255,157,0.16)';
+      ctx.beginPath();
+      sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = '#00ff9d'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+    ctx.stroke();
+
+    if (hovImg) {
+      var last = sp[sp.length - 1], cur = i2s(hovImg.x, hovImg.y);
+      ctx.strokeStyle = '#f0c44d'; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(cur[0], cur[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    sp.forEach(function (p, idx) {
+      ctx.beginPath(); ctx.arc(p[0], p[1], idx === 0 && sp.length >= 3 ? 7 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = idx === 0 ? '#f0c44d' : '#00ff9d'; ctx.fill();
+      ctx.strokeStyle = '#040911'; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+    ctx.restore();
   }
 
   function drawGuideSegment(a, b, col, tag) {
@@ -405,9 +987,7 @@ window.SOS = window.SOS || {};
 
       var pxD = Math.hypot(b.x - a.x, b.y - a.y);
       var lbl = tag + ': ' + pxD.toFixed(1) + ' px';
-      if (doc.calibration.pxPerMeter > 0) {
-        lbl += '  |  ' + (pxD / doc.calibration.pxPerMeter).toFixed(2) + ' m';
-      }
+      if (doc.calibration.pxPerMeter > 0) lbl += '  |  ' + (pxD / doc.calibration.pxPerMeter).toFixed(2) + ' m';
       var mx = (sa[0] + sb[0]) / 2, my = (sa[1] + sb[1]) / 2 - 14;
       ctx.font = 'bold 11px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       var tw = ctx.measureText(lbl).width + 14;
@@ -422,13 +1002,11 @@ window.SOS = window.SOS || {};
     var screenPxPerM = doc.calibration.pxPerMeter * view.s;
     if (!(screenPxPerM > 0)) return;
     var nice = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000].filter(function (m) { return m * screenPxPerM >= 60; })[0] || 1000;
-    var barPx = nice * screenPxPerM;
-    var x0 = 16, y0 = H - 18;
+    var barPx = nice * screenPxPerM, x0 = 16, y0 = H - 18;
     ctx.save();
     ctx.fillStyle = isDay ? 'rgba(255,255,255,0.92)' : 'rgba(6,13,24,0.88)';
     ctx.fillRect(x0 - 6, y0 - 22, barPx + 14, 28);
-    ctx.strokeStyle = isDay ? '#0f172a' : '#00ff9d';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isDay ? '#0f172a' : '#00ff9d'; ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x0, y0); ctx.lineTo(x0 + barPx, y0);
     ctx.moveTo(x0, y0 - 6); ctx.lineTo(x0, y0 + 3);
@@ -441,15 +1019,15 @@ window.SOS = window.SOS || {};
   }
 
   function drawViewportHud(isDay) {
-    var parts = ['ZOOM ' + Math.round(view.s * 100) + '%'];
+    var parts = ['TOOL: ' + tool.toUpperCase(), 'ZOOM ' + Math.round(view.s * 100) + '%'];
     if (imgs.base) parts.push('BASE ' + imgs.base.naturalWidth + 'x' + imgs.base.naturalHeight + ' px');
     if (hovImg) {
-      parts.push('PX (' + Math.round(hovImg.x) + ', ' + Math.round(hovImg.y) + ')');
+      parts.push('PX (' + Math.round(hovImg.x) + ',' + Math.round(hovImg.y) + ')');
       if (doc.calibration.pxPerMeter > 0) {
-        parts.push('M (' + (hovImg.x / doc.calibration.pxPerMeter).toFixed(1) + ', ' + (hovImg.y / doc.calibration.pxPerMeter).toFixed(1) + ')');
+        parts.push('M (' + (hovImg.x / doc.calibration.pxPerMeter).toFixed(1) + ',' + (hovImg.y / doc.calibration.pxPerMeter).toFixed(1) + ')');
       }
     }
-    var txt = parts.join('  |  ');
+    var txt = parts.join(' | ');
     ctx.save();
     ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     var tw = Math.min(W - 20, ctx.measureText(txt).width + 16);
@@ -463,7 +1041,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // CALIBRATION ACTIONS
+  // CALIBRATION & ASSET MANAGEMENT ACTIONS
   // =========================================================================
   function applyCalibration(knownMeters) {
     var m = parseFloat(knownMeters);
@@ -481,10 +1059,9 @@ window.SOS = window.SOS || {};
       knownMeters: m
     };
     persistToIDB();
-    setStatus('Scale calibrated: ' + doc.calibration.pxPerMeter.toFixed(3) + ' px/m (' + pxDist.toFixed(1) + ' px = ' + m + ' m).', false);
-    setTool('pan');
-    syncUI();
-    draw();
+    setStatus('Scale calibrated: ' + doc.calibration.pxPerMeter.toFixed(3) + ' px/m.', false);
+    setTool('select');
+    syncUI(); draw();
   }
 
   function clearCalibration() {
@@ -493,12 +1070,51 @@ window.SOS = window.SOS || {};
     calibDraft = { p1: null, p2: null };
     persistToIDB();
     setStatus('Scale calibration cleared.', false);
-    syncUI();
-    draw();
+    syncUI(); draw();
+  }
+
+  function duplicateSelectedAsset() {
+    var a = getSelAsset();
+    if (!a) return;
+    pushUndo();
+    var copy = normalizeAsset(JSON.parse(JSON.stringify(a)));
+    copy.id = uid('ast');
+    copy.name = a.name + ' (copy)';
+    copy.x = +(a.x + 20).toFixed(2);
+    copy.y = +(a.y + 20).toFixed(2);
+    copy.locked = false;
+    doc.assets.push(copy);
+    selAssetId = copy.id;
+    persistToIDB();
+    syncUI(); draw();
+  }
+
+  function deleteSelectedAsset() {
+    var a = getSelAsset();
+    if (!a) return;
+    pushUndo();
+    doc.assets = doc.assets.filter(function (x) { return x.id !== a.id; });
+    selAssetId = null;
+    persistToIDB();
+    syncUI(); draw();
+  }
+
+  function reorderSelectedAsset(dir) {
+    var idx = -1;
+    for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === selAssetId) { idx = i; break; }
+    if (idx < 0) return;
+    var ni = idx + dir;
+    if (ni < 0 || ni >= doc.assets.length) return;
+    pushUndo();
+    var tmp = doc.assets[idx];
+    doc.assets[idx] = doc.assets[ni];
+    doc.assets[ni] = tmp;
+    persistToIDB();
+    syncUI(); draw();
   }
 
   // =========================================================================
-  // POINTER & KEYBOARD HANDLERS (FULLY ISOLATED)
+  // POINTER & KEYBOARD HANDLERS (ISOLATED)
   // =========================================================================
   function posOf(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   function twoPtrs() {
@@ -508,6 +1124,10 @@ window.SOS = window.SOS || {};
 
   function bindCanvas() {
     cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    cv.addEventListener('dblclick', function () {
+      if (tool === 'cutout' && cutPts.length >= 3) extractCutoutFromBase();
+    });
+
     cv.addEventListener('pointerdown', function (e) {
       cv.setPointerCapture(e.pointerId);
       var p = posOf(e); ptrs[e.pointerId] = p;
@@ -521,24 +1141,116 @@ window.SOS = window.SOS || {};
         drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
         return;
       }
+
+      // SELECT / TRANSFORM ASSETS
+      if (tool === 'select') {
+        var sel = getSelAsset();
+        var hk = hitAssetHandle(sel, p);
+        if (hk && sel) {
+          if (hk === 'rot') {
+            drag = { m: 'rot', a: sel, pushed: false };
+            return;
+          }
+          var hw = sel.wPx / 2, hh = sel.hPx / 2;
+          var oppMap = { tl: [hw, hh], tr: [-hw, hh], br: [-hw, -hh], bl: [hw, -hh] };
+          var signMap = { tl: [-1, -1], tr: [1, -1], br: [1, 1], bl: [-1, 1] };
+          var opp = oppMap[hk], sgn = signMap[hk];
+          var anchor = assetLocalToImg(sel, opp[0], opp[1]);
+          drag = {
+            m: 'resize', a: sel, sx: sgn[0], sy: sgn[1],
+            anchor: anchor, origW: sel.wPx, origH: sel.hPx,
+            rad: (sel.rotationDeg || 0) * D, pushed: false
+          };
+          return;
+        }
+        var hit = hitAssetAt(ip);
+        if (hit) {
+          selAssetId = hit.id;
+          drag = { m: 'move', a: hit, sx: ip.x, sy: ip.y, x0: hit.x, y0: hit.y, pushed: false };
+          syncUI(); draw(); return;
+        }
+        selAssetId = null;
+        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
+        syncUI(); draw(); return;
+      }
+
+      // CLONE PATCH (SOFT-FEATHERED SOIL STAMP)
+      if (tool === 'clone') {
+        if (e.altKey || cloneCfg.pickMode || !cloneCfg.src) {
+          cloneCfg.src = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
+          cloneCfg.pickMode = false;
+          setStatus('Clone source set at (' + Math.round(ip.x) + ', ' + Math.round(ip.y) + '). Click/drag on target area to clean (Alt+Click to re-pick).', false);
+          syncUI(); draw(); return;
+        }
+        pushUndo();
+        doc.layers.cleanup.visible = true;
+        var p0 = {
+          id: uid('ptc'),
+          sx: cloneCfg.src.x, sy: cloneCfg.src.y,
+          dx: +ip.x.toFixed(2), dy: +ip.y.toFixed(2),
+          r: cloneCfg.radius, feather: cloneCfg.feather,
+          opacity: cloneCfg.opacity, rotDeg: cloneCfg.rotDeg
+        };
+        doc.patches.push(p0);
+        cleanupDirty = true;
+        drag = { m: 'clone', startSrc: { x: cloneCfg.src.x, y: cloneCfg.src.y }, startDst: ip, lastDst: ip };
+        draw(); return;
+      }
+
+      // SOFT ERASER ON LAYER 02_GROUND_CLEANUP
+      if (tool === 'erase') {
+        if (!imgs.cleanup && !doc.patches.length) {
+          setStatus('Nothing on 02_Ground_Cleanup to erase yet.', true);
+          return;
+        }
+        pushUndo();
+        var st = {
+          id: uid('ers'),
+          r: eraseCfg.radius,
+          feather: eraseCfg.feather,
+          opacity: eraseCfg.opacity,
+          pts: [{ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }]
+        };
+        doc.cleanupErases.push(st);
+        cleanupDirty = true;
+        drag = { m: 'erase', stroke: st, last: ip };
+        draw(); return;
+      }
+
+      // CUT & RELOCATE POLYGON (A -> B)
+      if (tool === 'cutout') {
+        if (cutPts.length >= 3) {
+          var firstSp = i2s(cutPts[0].x, cutPts[0].y);
+          if (Math.hypot(p.x - firstSp[0], p.y - firstSp[1]) <= 13) {
+            extractCutoutFromBase();
+            return;
+          }
+        }
+        cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
+        setStatus('Cutout polygon: ' + cutPts.length + ' points. Click first yellow point or press Enter to extract 1:1 cutout.', false);
+        syncUI(); draw(); return;
+      }
+
+      // CALIBRATE SCALE (2-PT)
       if (tool === 'calibrate') {
         if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) {
           calibDraft = { p1: ip, p2: null };
-          setStatus('Calibration Point 1 set. Click Point 2 on the opposite end of your known reference.', false);
+          setStatus('Calibration Point 1 set. Click Point 2 on opposite end of reference.', false);
         } else {
           calibDraft.p2 = ip;
           var pxD = Math.hypot(ip.x - calibDraft.p1.x, ip.y - calibDraft.p1.y);
-          setStatus('Calibration line: ' + pxD.toFixed(1) + ' px. Enter real length (m) in the right panel and click Apply Scale.', false);
+          setStatus('Calibration line: ' + pxD.toFixed(1) + ' px. Enter real meters and click Apply Scale.', false);
         }
         syncUI(); draw(); return;
       }
+
+      // MEASURE
       if (tool === 'measure') {
         if (measPts.length >= 2) measPts = [];
         measPts.push(ip);
         if (measPts.length === 2) {
           var dPx = Math.hypot(measPts[1].x - measPts[0].x, measPts[1].y - measPts[0].y);
-          var msg = 'Measured: ' + dPx.toFixed(1) + ' px' + (doc.calibration.pxPerMeter > 0 ? (' | ' + (dPx / doc.calibration.pxPerMeter).toFixed(2) + ' m') : ' (calibrate scale for meters)');
-          setStatus(msg, false);
+          setStatus('Measured: ' + dPx.toFixed(1) + ' px' + (doc.calibration.pxPerMeter > 0 ? (' | ' + (dPx / doc.calibration.pxPerMeter).toFixed(2) + ' m') : ' (calibrate for meters)'), false);
         }
         draw(); return;
       }
@@ -546,8 +1258,9 @@ window.SOS = window.SOS || {};
 
     cv.addEventListener('pointermove', function (e) {
       var p = posOf(e); if (ptrs[e.pointerId]) ptrs[e.pointerId] = p;
-      hovImg = s2i(p.x, p.y);
+      var ip = s2i(p.x, p.y); hovImg = ip;
       if (!drag) { draw(); return; }
+
       if (drag.m === 'pan') {
         view.ox = drag.ox + (p.x - drag.x);
         view.oy = drag.oy + (p.y - drag.y);
@@ -557,12 +1270,65 @@ window.SOS = window.SOS || {};
         view.s = ns;
         view.ox = t.x - drag.imgPt.x * ns;
         view.oy = t.y - drag.imgPt.y * ns;
+      } else if (drag.m === 'move') {
+        if (!drag.pushed) { pushUndo(); drag.pushed = true; }
+        drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2);
+        drag.a.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2);
+      } else if (drag.m === 'rot') {
+        if (!drag.pushed) { pushUndo(); drag.pushed = true; }
+        var deg = Math.atan2(ip.y - drag.a.y, ip.x - drag.a.x) / D + 90;
+        deg = ((deg % 360) + 360) % 360;
+        if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+        drag.a.rotationDeg = +deg.toFixed(1);
+      } else if (drag.m === 'resize') {
+        if (!drag.pushed) { pushUndo(); drag.pushed = true; }
+        var ux = Math.cos(drag.rad), uy = Math.sin(drag.rad);
+        var vx = -Math.sin(drag.rad), vy = Math.cos(drag.rad);
+        var ddx = ip.x - drag.anchor.x, ddy = ip.y - drag.anchor.y;
+        var nw = Math.max(8, (ddx * ux + ddy * uy) * drag.sx);
+        var nh = Math.max(8, (ddx * vx + ddy * vy) * drag.sy);
+        if (drag.a.lockAspect || e.shiftKey) {
+          var asp = drag.origW / Math.max(1, drag.origH);
+          if (nw / drag.origW >= nh / drag.origH) nh = nw / asp; else nw = nh * asp;
+        }
+        drag.a.x = +(drag.anchor.x + (drag.sx * nw / 2) * ux + (drag.sy * nh / 2) * vx).toFixed(2);
+        drag.a.y = +(drag.anchor.y + (drag.sx * nw / 2) * uy + (drag.sy * nh / 2) * vy).toFixed(2);
+        drag.a.wPx = +nw.toFixed(2);
+        drag.a.hPx = +nh.toFixed(2);
+      } else if (drag.m === 'clone') {
+        var spacing = Math.max(4, cloneCfg.radius * 0.35);
+        if (Math.hypot(ip.x - drag.lastDst.x, ip.y - drag.lastDst.y) >= spacing) {
+          var sx = cloneCfg.followDrag ? (drag.startSrc.x + (ip.x - drag.startDst.x)) : drag.startSrc.x;
+          var sy = cloneCfg.followDrag ? (drag.startSrc.y + (ip.y - drag.startDst.y)) : drag.startSrc.y;
+          doc.patches.push({
+            id: uid('ptc'),
+            sx: +sx.toFixed(2), sy: +sy.toFixed(2),
+            dx: +ip.x.toFixed(2), dy: +ip.y.toFixed(2),
+            r: cloneCfg.radius, feather: cloneCfg.feather,
+            opacity: cloneCfg.opacity, rotDeg: cloneCfg.rotDeg
+          });
+          drag.lastDst = ip;
+          cleanupDirty = true;
+        }
+      } else if (drag.m === 'erase') {
+        if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(3, eraseCfg.radius * 0.22)) {
+          drag.stroke.pts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
+          drag.last = ip;
+          cleanupDirty = true;
+        }
       }
       draw();
     });
 
     function up(e) {
       delete ptrs[e.pointerId];
+      if (drag) {
+        if ((drag.m === 'move' || drag.m === 'rot' || drag.m === 'resize') && drag.pushed) {
+          persistToIDB(); syncUI();
+        } else if (drag.m === 'clone' || drag.m === 'erase') {
+          persistToIDB(); syncUI();
+        }
+      }
       if (!Object.keys(ptrs).length || (drag && drag.m === 'pinch')) drag = null;
     }
     cv.addEventListener('pointerup', up);
@@ -586,24 +1352,32 @@ window.SOS = window.SOS || {};
     if (e.key === 'Escape') {
       calibDraft = { p1: null, p2: null };
       measPts = [];
-      setTool('pan');
-      draw();
-      return;
+      cutPts = [];
+      cloneCfg.pickMode = false;
+      setTool('select');
+      syncUI(); draw(); return;
+    }
+    if (tool === 'cutout') {
+      if (e.key === 'Backspace' && cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
+      if (e.key === 'Enter' && cutPts.length >= 3) { e.preventDefault(); extractCutoutFromBase(); return; }
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      if (e.shiftKey) doRedo(); else doUndo();
-      return;
+      e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-      e.preventDefault();
-      doRedo();
+      e.preventDefault(); doRedo(); return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+      if (getSelAsset()) { e.preventDefault(); duplicateSelectedAsset(); } return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (getSelAsset()) { e.preventDefault(); deleteSelectedAsset(); }
     }
   }
   function onKeyUp(e) { if (e.key === ' ') space = false; }
 
   // =========================================================================
-  // UI BUILD (USES STUDIO CSS VARIABLES FOR CYBER HUD + DAYLIGHT PARITY)
+  // UI BUILD & SYNC (CYBER HUD + DAYLIGHT DESIGN MODE COMPATIBLE)
   // =========================================================================
   function ensureCss() {
     if (document.getElementById('aj-satc-css')) return;
@@ -612,36 +1386,45 @@ window.SOS = window.SOS || {};
     st.textContent =
       '.satc{position:fixed;inset:0;z-index:945;background:var(--bg-deep,#060d18);color:var(--txt-main,#d9ecff);display:flex;flex-direction:column;font-family:' + MONO + '}' +
       '.satc.hide{display:none}' +
-      '.satc-top{display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg-panel,#0a1626);border-bottom:1px solid var(--border-petrol,#1b3b57);overflow-x:auto;flex-shrink:0}' +
+      '.satc-top{display:flex;align-items:center;gap:5px;padding:6px 10px;background:var(--bg-panel,#0a1626);border-bottom:1px solid var(--border-petrol,#1b3b57);overflow-x:auto;flex-shrink:0}' +
       '.satc-title{background:var(--grad-sig,linear-gradient(90deg,#00b4d8,#00ff9d));-webkit-background-clip:text;background-clip:text;color:transparent;font-size:12px;font-weight:800;letter-spacing:.6px;white-space:nowrap;margin-right:4px}' +
       '.satc .sp{flex:1;min-width:8px}' +
       '.satc-body{flex:1;display:flex;min-height:0;overflow:hidden}' +
-      '.satc-side{width:255px;background:var(--bg-panel,#0a1626);border-right:1px solid var(--border-petrol,#1b3b57);padding:10px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;flex-shrink:0}' +
-      '.satc-side.r{border-right:0;border-left:1px solid var(--border-petrol,#1b3b57);width:270px}' +
+      '.satc-side{width:265px;background:var(--bg-panel,#0a1626);border-right:1px solid var(--border-petrol,#1b3b57);padding:9px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;flex-shrink:0}' +
+      '.satc-side.r{border-right:0;border-left:1px solid var(--border-petrol,#1b3b57);width:280px}' +
       '.satc-side h4{margin:6px 0 2px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--txt-sub,#78b5a0);border-bottom:1px solid var(--border-petrol,#1b3b57);padding-bottom:3px}' +
       '.satc-side h4:first-child{margin-top:0}' +
       '.satc-cv{flex:1;position:relative;min-width:0;min-height:0;overflow:hidden;background:var(--bg-input,#040911)}' +
       '#scCv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}' +
       '.satc-card{background:var(--bg-input,#040911);border:1px solid var(--border-petrol,#1b3b57);border-radius:5px;padding:7px 8px;display:flex;flex-direction:column;gap:5px;font-size:11px}' +
-      '.satc-layer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 6px;border:1px solid var(--border-petrol,#1b3b57);border-radius:4px;background:var(--bg-input,#040911);font-size:11px}' +
+      '.satc-layer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 6px;border:1px solid var(--border-petrol,#1b3b57);border-radius:4px;background:var(--bg-input,#040911);font-size:11px}' +
       '.satc-layer label{display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;color:var(--txt-main,#d9ecff)!important}' +
       '.satc-tag{font-size:9px;padding:2px 5px;border-radius:3px;border:1px solid var(--border-petrol,#1b3b57);color:var(--txt-mut,#7f9bb5);white-space:nowrap}' +
       '.satc-tag.lk{border-color:var(--amber,#f0c44d);color:var(--amber,#f0c44d)}' +
+      '.satc-tag.ok{border-color:var(--glow-green,#00ff9d);color:var(--glow-green,#00ff9d)}' +
+      '.satc-alist{display:flex;flex-direction:column;gap:4px;max-height:190px;overflow-y:auto}' +
+      '.satc-ait{display:flex;align-items:center;justify-content:space-between;gap:5px;padding:5px 6px;border:1px solid var(--border-petrol,#1b3b57);border-radius:4px;background:var(--bg-input,#040911);cursor:pointer;font-size:11px}' +
+      '.satc-ait.sel{border-color:var(--glow-green,#00ff9d);background:rgba(0,255,157,.1)}' +
+      '.satc-ait span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}' +
+      '.satc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:5px}' +
       '.satc-foot{display:flex;align-items:center;gap:10px;padding:4px 10px;background:var(--bg-panel,#0a1626);border-top:1px solid var(--border-petrol,#1b3b57);font-size:10px;flex-shrink:0}' +
       '#scStatus{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--glow-cyan,#00e5ff)}' +
       '#scIdb{color:var(--glow-green,#00ff9d);white-space:nowrap}' +
-      '@media(max-width:900px){.satc-body{flex-direction:column}.satc-side,.satc-side.r{width:100%;max-height:175px;border:0;border-bottom:1px solid var(--border-petrol,#1b3b57)}.satc-side.r{border-bottom:0;border-top:1px solid var(--border-petrol,#1b3b57)}}';
+      '@media(max-width:920px){.satc-body{flex-direction:column}.satc-side,.satc-side.r{width:100%;max-height:185px;border:0;border-bottom:1px solid var(--border-petrol,#1b3b57)}.satc-side.r{border-bottom:0;border-top:1px solid var(--border-petrol,#1b3b57)}}';
     document.head.appendChild(st);
   }
 
   function setTool(t) {
     tool = t;
     if (t !== 'measure') measPts = [];
+    if (t !== 'cutout') cutPts = [];
+    if (t !== 'clone') cloneCfg.pickMode = false;
     if (!ov) return;
     [].forEach.call(ov.querySelectorAll('[data-sctool]'), function (b) {
       b.classList.toggle('on', b.dataset.sctool === t);
     });
-    if (cv) cv.style.cursor = t === 'pan' ? 'grab' : 'crosshair';
+    if (cv) cv.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
+    syncUI();
     draw();
   }
 
@@ -664,8 +1447,114 @@ window.SOS = window.SOS || {};
           if (st) parts.push('Selected (' + (sf.en_name || sf.category) + '): ' + st.w.toFixed(1) + 'x' + st.d.toFixed(1) + ' m');
         }
       }
-      return parts.length ? ('AJ-GeoCAD Ref: ' + parts.join(' | ')) : 'Tip: Pick a building edge or pitch length from AJ-GeoCAD to calibrate.';
+      return parts.length ? ('AJ-GeoCAD Ref: ' + parts.join(' | ')) : 'Tip: Calibrate using a known building wall or pitch length from AJ-GeoCAD.';
     } catch (e) { return ''; }
+  }
+
+  function renderAssetInspector() {
+    var box = ov.querySelector('#scAssetInsp');
+    var a = getSelAsset();
+    if (!a) {
+      box.innerHTML = '<div class="mut">Select an asset on the canvas or from 03_Movable_Assets list to move, resize, or rotate.</div>';
+      return;
+    }
+    var ppm = doc.calibration.pxPerMeter || 0;
+    var wM = ppm > 0 ? (a.wPx / ppm).toFixed(2) : '';
+    var hM = ppm > 0 ? (a.hPx / ppm).toFixed(2) : '';
+
+    box.innerHTML =
+      '<label>Asset Name<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
+      (ppm > 0
+        ? '<div class="satc-grid2">' +
+            '<label>Width (m)<input type="number" id="saWm" step="0.1" min="0.2" value="' + wM + '"></label>' +
+            '<label>Height (m)<input type="number" id="saHm" step="0.1" min="0.2" value="' + hM + '"></label>' +
+          '</div>'
+        : '<div class="mut">Calibrate scale (px/m) to enter exact dimensions in meters.</div>') +
+      '<div class="satc-grid2">' +
+        '<label>Width (px)<input type="number" id="saWpx" step="1" min="8" value="' + Math.round(a.wPx) + '"></label>' +
+        '<label>Height (px)<input type="number" id="saHpx" step="1" min="8" value="' + Math.round(a.hPx) + '"></label>' +
+      '</div>' +
+      '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>Lock Aspect Ratio</label>' +
+      '<label>Rotation (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>&deg;)' +
+        '<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '">' +
+      '</label>' +
+      '<div class="satc-grid2">' +
+        '<label>Angle (&deg;)<input type="number" id="saRotN" step="0.5" value="' + (a.rotationDeg || 0) + '"></label>' +
+        '<label>Opacity (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" step="1" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label>' +
+      '</div>' +
+      '<div class="row">' +
+        '<button id="saFlipH"' + (a.flipX ? ' class="on"' : '') + '>Flip H</button>' +
+        '<button id="saFlipV"' + (a.flipY ? ' class="on"' : '') + '>Flip V</button>' +
+        '<button id="saLock"' + (a.locked ? ' class="amb"' : '') + '>' + (a.locked ? 'Unlock' : 'Lock') + '</button>' +
+      '</div>' +
+      '<div class="row">' +
+        '<button id="saUp">Bring Up</button>' +
+        '<button id="saDn">Send Down</button>' +
+        '<button id="saDup" class="cy">Clone</button>' +
+      '</div>' +
+      (a.source === 'cutout'
+        ? '<div class="row"><button id="saCleanA" class="amb">Clean Old Spot (A) ➔ Clone Patch</button></div>'
+        : '') +
+      '<div class="row"><button id="saDel" class="dng">Delete Asset</button></div>';
+
+    box.querySelector('#saName').onchange = function () { pushUndo(); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
+    box.querySelector('#saLockAsp').onchange = function () { pushUndo(); a.lockAspect = !!this.checked; persistToIDB(); };
+
+    function setDimsPx(nw, nh, changedAxis) {
+      if (!(nw > 4) || !(nh > 4)) return;
+      pushUndo();
+      var asp = a.naturalW / Math.max(1, a.naturalH);
+      if (a.lockAspect) {
+        if (changedAxis === 'w') nh = nw / asp; else nw = nh * asp;
+      }
+      a.wPx = +nw.toFixed(2); a.hPx = +nh.toFixed(2);
+      persistToIDB(); syncUI(); draw();
+    }
+    if (ppm > 0) {
+      box.querySelector('#saWm').onchange = function () { setDimsPx((parseFloat(this.value) || 1) * ppm, a.hPx, 'w'); };
+      box.querySelector('#saHm').onchange = function () { setDimsPx(a.wPx, (parseFloat(this.value) || 1) * ppm, 'h'); };
+    }
+    box.querySelector('#saWpx').onchange = function () { setDimsPx(parseFloat(this.value) || 8, a.hPx, 'w'); };
+    box.querySelector('#saHpx').onchange = function () { setDimsPx(a.wPx, parseFloat(this.value) || 8, 'h'); };
+
+    var rotPushed = false;
+    box.querySelector('#saRot').oninput = function () {
+      if (!rotPushed) { pushUndo(); rotPushed = true; }
+      a.rotationDeg = +this.value;
+      box.querySelector('#saRotV').textContent = Math.round(a.rotationDeg);
+      box.querySelector('#saRotN').value = a.rotationDeg;
+      draw();
+    };
+    box.querySelector('#saRot').onchange = function () { rotPushed = false; persistToIDB(); };
+    box.querySelector('#saRotN').onchange = function () {
+      pushUndo();
+      a.rotationDeg = (((parseFloat(this.value) || 0) % 360) + 360) % 360;
+      persistToIDB(); syncUI(); draw();
+    };
+
+    var opPushed = false;
+    box.querySelector('#saOp').oninput = function () {
+      if (!opPushed) { pushUndo(); opPushed = true; }
+      a.opacity = (+this.value) / 100;
+      box.querySelector('#saOpV').textContent = this.value;
+      draw();
+    };
+    box.querySelector('#saOp').onchange = function () { opPushed = false; persistToIDB(); };
+
+    box.querySelector('#saFlipH').onclick = function () { pushUndo(); a.flipX = !a.flipX; persistToIDB(); syncUI(); draw(); };
+    box.querySelector('#saFlipV').onclick = function () { pushUndo(); a.flipY = !a.flipY; persistToIDB(); syncUI(); draw(); };
+    box.querySelector('#saLock').onclick = function () { pushUndo(); a.locked = !a.locked; persistToIDB(); syncUI(); draw(); };
+    box.querySelector('#saUp').onclick = function () { reorderSelectedAsset(1); };
+    box.querySelector('#saDn').onclick = function () { reorderSelectedAsset(-1); };
+    box.querySelector('#saDup').onclick = duplicateSelectedAsset;
+    box.querySelector('#saDel').onclick = deleteSelectedAsset;
+    if (box.querySelector('#saCleanA')) {
+      box.querySelector('#saCleanA').onclick = function () {
+        cloneCfg.pickMode = !cloneCfg.src;
+        setTool('clone');
+        setStatus(cloneCfg.src ? 'Paint over old Spot (A) to cover it with clean soil (Alt+Click to pick new source).' : 'Click a clean ground spot to set Clone Source, then paint over Spot (A).', false);
+      };
+    }
   }
 
   function syncUI() {
@@ -673,7 +1562,7 @@ window.SOS = window.SOS || {};
     syncUndoBtns();
     setIdbBadge(idbStatus);
 
-    // Base info card
+    // 01_Base_Satellite Info
     var bi = ov.querySelector('#scBaseInfo');
     if (imgs.base && doc.base.width) {
       var mp = (doc.base.width * doc.base.height) / 1e6;
@@ -686,11 +1575,59 @@ window.SOS = window.SOS || {};
       bi.innerHTML = '<span class="mut">No base satellite image loaded yet.</span>';
     }
 
-    // Layers checkboxes
+    // Layers visibility & opacity
     ov.querySelector('#scLayBase').checked = !!doc.layers.base.visible;
     ov.querySelector('#scLayClean').checked = !!doc.layers.cleanup.visible;
     ov.querySelector('#scLayAssets').checked = !!doc.layers.assets.visible;
     ov.querySelector('#scLayOver').checked = !!doc.layers.overlays.visible;
+    ov.querySelector('#scCleanOp').value = Math.round((doc.layers.cleanup.opacity != null ? doc.layers.cleanup.opacity : 1) * 100);
+    ov.querySelector('#scCleanOpV').textContent = Math.round((doc.layers.cleanup.opacity != null ? doc.layers.cleanup.opacity : 1) * 100);
+
+    // 02_Ground_Cleanup info & controls
+    ov.querySelector('#scCleanStat').textContent =
+      (imgs.cleanup ? ('Image: ' + doc.cleanupImage.name) : 'Image: None') +
+      ' | Patches: ' + doc.patches.length + ' | Erases: ' + doc.cleanupErases.length;
+    ov.querySelector('#scSrcStat').textContent = cloneCfg.src
+      ? ('Source: (' + Math.round(cloneCfg.src.x) + ', ' + Math.round(cloneCfg.src.y) + ')')
+      : 'Source: Not picked (Alt+Click)';
+    ov.querySelector('#scPickSrc').classList.toggle('on', !!cloneCfg.pickMode);
+
+    // 03_Movable_Assets list (topmost first in UI)
+    var al = ov.querySelector('#scAssetList');
+    if (!doc.assets.length) {
+      al.innerHTML = '<div class="mut">No assets yet. Import PNGs or use Cut &amp; Relocate (A➔B).</div>';
+    } else {
+      al.innerHTML = doc.assets.slice().reverse().map(function (a) {
+        return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '">' +
+          '<input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + ' title="Toggle visibility">' +
+          '<span>' + esc(a.name) + '</span>' +
+          '<b class="satc-tag' + (a.source === 'cutout' ? ' lk' : ' ok') + '">' + (a.source === 'cutout' ? 'CUT' : 'PNG') + '</b>' +
+        '</div>';
+      }).join('');
+      [].forEach.call(al.querySelectorAll('[data-aid]'), function (el) {
+        el.onclick = function (ev) {
+          if (ev.target && ev.target.dataset && ev.target.dataset.avis) return;
+          selAssetId = el.dataset.aid;
+          syncUI(); draw();
+        };
+      });
+      [].forEach.call(al.querySelectorAll('[data-avis]'), function (cb) {
+        cb.onchange = function () {
+          var id = cb.dataset.avis;
+          for (var i = 0; i < doc.assets.length; i++) {
+            if (doc.assets[i].id === id) { pushUndo(); doc.assets[i].visible = !!cb.checked; persistToIDB(); draw(); break; }
+          }
+        };
+      });
+    }
+
+    // Cutout contextual box
+    var cutBox = ov.querySelector('#scCutBox');
+    cutBox.style.display = tool === 'cutout' ? 'flex' : 'none';
+    ov.querySelector('#scCutPtsV').textContent = String(cutPts.length);
+
+    // Asset Inspector
+    renderAssetInspector();
 
     // Calibration card
     var p1 = calibDraft.p1 || doc.calibration.p1;
@@ -698,17 +1635,11 @@ window.SOS = window.SOS || {};
     var pxD = (p1 && p2) ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
     ov.querySelector('#scCalPx').textContent = pxD > 0 ? (pxD.toFixed(1) + ' px') : 'Not picked';
     ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0
-      ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m  (1 px = ' + (100 / doc.calibration.pxPerMeter).toFixed(1) + ' cm)')
+      ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m (1 px = ' + (100 / doc.calibration.pxPerMeter).toFixed(1) + ' cm)')
       : 'Uncalibrated (px only)';
     var mInp = ov.querySelector('#scCalM');
     if (document.activeElement !== mInp) mInp.value = doc.calibration.knownMeters || 10;
     ov.querySelector('#scCadHint').textContent = getCadScaleHint();
-  }
-
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
-    });
   }
 
   function resize() {
@@ -727,34 +1658,72 @@ window.SOS = window.SOS || {};
     ov.dataset.ajDone = '1';
     ov.innerHTML =
       '<div class="satc-top">' +
-        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHASE 1)</b>' +
-        '<button id="scImportBase" class="on">Import Satellite Base</button>' +
-        '<button data-sctool="pan" class="on">Pan</button>' +
-        '<button data-sctool="calibrate" class="cy">Calibrate Scale (2-Pt)</button>' +
-        '<button data-sctool="measure">Measure (m)</button>' +
+        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHASE 2)</b>' +
+        '<button id="scImportBase" class="on">Import Base</button>' +
+        '<button data-sctool="select" class="on">Select / Move</button>' +
+        '<button data-sctool="pan">Pan</button>' +
+        '<button data-sctool="clone" class="amb" title="Soft-Feathered Clone Patch (Alt+Click picks source)">Clone Patch</button>' +
+        '<button data-sctool="erase" title="Soft Eraser on 02_Ground_Cleanup (reveals original base)">Soft Eraser</button>' +
+        '<button data-sctool="cutout" class="cy" title="Cut real pixels from 01_Base_Satellite (A) & relocate to (B)">Cut &amp; Relocate A➔B</button>' +
+        '<button id="scAddPng" class="on">+ PNG Asset</button>' +
+        '<button data-sctool="calibrate">Calibrate 2-Pt</button>' +
+        '<button data-sctool="measure">Measure</button>' +
         '<button id="scFit">Fit</button>' +
-        '<button id="sc100">100% (1:1)</button>' +
+        '<button id="sc100">100%</button>' +
         '<button id="scUndo" disabled>Undo</button>' +
         '<button id="scRedo" disabled>Redo</button>' +
         '<span class="sp"></span>' +
-        '<button id="scClearSat" class="dng">Clear Sat Data</button>' +
+        '<button id="scClearSat" class="dng">Clear Sat</button>' +
         '<button id="scClose" class="on">Back to CAD</button>' +
         '<input type="file" id="scFileBase" accept="image/png,image/jpeg,image/webp,image/*" hidden>' +
+        '<input type="file" id="scFileCleanup" accept="image/png,image/jpeg,image/webp,image/*" hidden>' +
+        '<input type="file" id="scFileAsset" accept="image/png,image/webp,image/svg+xml,image/*" multiple hidden>' +
       '</div>' +
       '<div class="satc-body">' +
         '<aside class="satc-side">' +
           '<h4>4-Layer Architecture</h4>' +
           '<div class="satc-layer"><label><input type="checkbox" id="scLayBase" checked>01_Base_Satellite</label><span class="satc-tag lk">LOCKED</span></div>' +
-          '<div class="satc-layer"><label><input type="checkbox" id="scLayClean" checked>02_Ground_Cleanup</label><span class="satc-tag">Phase 2</span></div>' +
-          '<div class="satc-layer"><label><input type="checkbox" id="scLayAssets" checked>03_Movable_Assets</label><span class="satc-tag">Phase 2</span></div>' +
+          '<div class="satc-layer"><label><input type="checkbox" id="scLayClean" checked>02_Ground_Cleanup</label><span class="satc-tag ok">ACTIVE</span></div>' +
+          '<div class="satc-layer"><label><input type="checkbox" id="scLayAssets" checked>03_Movable_Assets</label><span class="satc-tag ok">ACTIVE</span></div>' +
           '<div class="satc-layer"><label><input type="checkbox" id="scLayOver" checked>04_Print_Overlays</label><span class="satc-tag">Phase 4</span></div>' +
+
           '<h4>01_Base_Satellite Info</h4>' +
           '<div id="scBaseInfo" class="satc-card"></div>' +
           '<div class="row"><button id="scReplaceBase" class="cy">Load / Replace Base</button></div>' +
-          '<p class="mut">Base image is never downscaled or compressed. Stored locally in isolated IndexedDB (zero impact on CAD undo or localStorage).</p>' +
+
+          '<h4>02_Ground_Cleanup (Patch &amp; Eraser)</h4>' +
+          '<div class="satc-card">' +
+            '<div id="scCleanStat" class="mut"></div>' +
+            '<div class="row"><button id="scLoadClean" class="cy">Load Pre-Cleaned</button><button id="scClrCleanImg" class="dng">Clear Img</button></div>' +
+            '<label>Cleanup Opacity (<span id="scCleanOpV">100</span>%)<input type="range" id="scCleanOp" min="0" max="100" step="1" value="100"></label>' +
+            '<div id="scSrcStat" class="mut"></div>' +
+            '<div class="row"><button id="scPickSrc" class="cy">Pick Source</button><button id="scUseErase">Soft Eraser</button></div>' +
+            '<label>Brush Radius (<span id="scRadV">28</span> px)<input type="range" id="scRad" min="6" max="180" step="1" value="28"></label>' +
+            '<label>Soft Feather (<span id="scFeaV">65</span>%)<input type="range" id="scFea" min="5" max="100" step="1" value="65"></label>' +
+            '<label>Brush Opacity (<span id="scBopV">100</span>%)<input type="range" id="scBop" min="10" max="100" step="1" value="100"></label>' +
+            '<label>Patch Rotation (<span id="scProtV">0</span>&deg;)<input type="range" id="scProt" min="0" max="359" step="5" value="0"></label>' +
+            '<label class="ck"><input type="checkbox" id="scFollow" checked>Follow Drag (Clone Offset)</label>' +
+            '<div class="row"><button id="scClrPatches" class="dng">Clear Patches</button><button id="scClrErases" class="dng">Clear Erases</button></div>' +
+          '</div>' +
+
+          '<h4>03_Movable_Assets</h4>' +
+          '<div class="row"><button id="scAddPng2" class="on">+ PNG Asset</button><button id="scStartCut" class="cy">Cut A➔B</button></div>' +
+          '<div id="scAssetList" class="satc-alist"></div>' +
         '</aside>' +
+
         '<div class="satc-cv"><canvas id="scCv"></canvas></div>' +
+
         '<aside class="satc-side r">' +
+          '<div id="scCutBox" class="satc-card" style="display:none;border-color:var(--glow-cyan,#00e5ff)">' +
+            '<b>Cut &amp; Relocate (1:1 Native Pixels)</b>' +
+            '<div class="mut">Click around object in 01_Base_Satellite. Vertices: <b id="scCutPtsV">0</b></div>' +
+            '<label>Edge Feather (<span id="scCutFeaV">2</span> px)<input type="range" id="scCutFea" min="0" max="6" step="0.5" value="2"></label>' +
+            '<div class="row"><button id="scCutUndo">Undo Pt</button><button id="scCutExec" class="on">Extract 1:1</button><button id="scCutCan" class="dng">Cancel</button></div>' +
+          '</div>' +
+
+          '<h4>Selected Asset Inspector</h4>' +
+          '<div id="scAssetInsp" class="satc-card"></div>' +
+
           '<h4>Site Metric Calibration (px/m)</h4>' +
           '<div class="satc-card">' +
             '<div>Status: <b id="scCalStat">Uncalibrated</b></div>' +
@@ -764,12 +1733,6 @@ window.SOS = window.SOS || {};
             '<div class="row"><button id="scResetCal" class="dng">Clear Scale</button></div>' +
           '</div>' +
           '<p id="scCadHint" class="mut"></p>' +
-          '<h4>Upcoming Modules (Locked Order)</h4>' +
-          '<div class="satc-card mut">' +
-            '<div>• <b>Phase 2:</b> Cleanup Patches + PNG Assets + Cut &amp; Relocate (1:1 A ➔ B)</div>' +
-            '<div>• <b>Phase 3:</b> Global Sun Shadow (Multiply) + Satellite Match Filters</div>' +
-            '<div>• <b>Phase 4:</b> Print Overlays + Master_Clean_2D &amp; A3/A2/A1 Safe Export</div>' +
-          '</div>' +
         '</aside>' +
       '</div>' +
       '<div class="satc-foot">' +
@@ -782,45 +1745,113 @@ window.SOS = window.SOS || {};
     ctx = cv.getContext('2d');
     bindCanvas();
 
+    // File pickers
     var fBase = ov.querySelector('#scFileBase');
-    function openBasePicker() { fBase.value = ''; fBase.click(); }
-    ov.querySelector('#scImportBase').onclick = openBasePicker;
-    ov.querySelector('#scReplaceBase').onclick = openBasePicker;
+    var fClean = ov.querySelector('#scFileCleanup');
+    var fAsset = ov.querySelector('#scFileAsset');
+    function pickBase() { fBase.value = ''; fBase.click(); }
+    function pickAsset() { fAsset.value = ''; fAsset.click(); }
+    ov.querySelector('#scImportBase').onclick = pickBase;
+    ov.querySelector('#scReplaceBase').onclick = pickBase;
     fBase.onchange = function () { if (this.files && this.files[0]) importBaseFile(this.files[0]); };
 
+    ov.querySelector('#scLoadClean').onclick = function () { fClean.value = ''; fClean.click(); };
+    fClean.onchange = function () { if (this.files && this.files[0]) importCleanupFile(this.files[0]); };
+
+    ov.querySelector('#scAddPng').onclick = pickAsset;
+    ov.querySelector('#scAddPng2').onclick = pickAsset;
+    fAsset.onchange = function () { if (this.files && this.files.length) importAssetFiles(this.files); };
+
+    // Top bar tools & navigation
     [].forEach.call(ov.querySelectorAll('[data-sctool]'), function (b) {
       b.onclick = function () { setTool(b.dataset.sctool); };
     });
+    ov.querySelector('#scStartCut').onclick = function () {
+      if (!imgs.base) { setStatus('Import base satellite image first.', true); return; }
+      cutPts = []; setTool('cutout');
+      setStatus('Click points around the real object (A) to extract at 1:1 natural pixels.', false);
+    };
     ov.querySelector('#scFit').onclick = fitView;
     ov.querySelector('#sc100').onclick = zoomNative100;
     ov.querySelector('#scUndo').onclick = doUndo;
     ov.querySelector('#scRedo').onclick = doRedo;
     ov.querySelector('#scClose').onclick = close;
     ov.querySelector('#scClearSat').onclick = function () {
-      if (confirm('Clear satellite base image, calibration, and local IndexedDB data for Sat Studio? (Your CAD map stays untouched)')) {
-        clearData(false);
-      }
+      if (confirm('Clear ALL Sat Studio layers, assets, and local IndexedDB data? (Your CAD map stays untouched)')) clearData(false);
     };
 
-    function bindLayerToggle(id, key) {
-      ov.querySelector(id).onchange = function () {
-        pushUndo();
-        doc.layers[key].visible = !!this.checked;
-        persistToIDB();
-        draw();
-      };
+    // Layer toggles
+    function bindLay(id, key) {
+      ov.querySelector(id).onchange = function () { pushUndo(); doc.layers[key].visible = !!this.checked; persistToIDB(); draw(); };
     }
-    bindLayerToggle('#scLayBase', 'base');
-    bindLayerToggle('#scLayClean', 'cleanup');
-    bindLayerToggle('#scLayAssets', 'assets');
-    bindLayerToggle('#scLayOver', 'overlays');
+    bindLay('#scLayBase', 'base');
+    bindLay('#scLayClean', 'cleanup');
+    bindLay('#scLayAssets', 'assets');
+    bindLay('#scLayOver', 'overlays');
 
+    var clnOpPushed = false;
+    ov.querySelector('#scCleanOp').oninput = function () {
+      if (!clnOpPushed) { pushUndo(); clnOpPushed = true; }
+      doc.layers.cleanup.opacity = (+this.value) / 100;
+      ov.querySelector('#scCleanOpV').textContent = this.value;
+      draw();
+    };
+    ov.querySelector('#scCleanOp').onchange = function () { clnOpPushed = false; persistToIDB(); };
+
+    // Cleanup tools controls
+    ov.querySelector('#scClrCleanImg').onclick = function () {
+      if (!imgs.cleanup) return;
+      pushUndo(); bins.cleanup = null; imgs.cleanup = null;
+      doc.cleanupImage = { id: null, name: '', width: 0, height: 0 };
+      cleanupDirty = true; persistToIDB(); syncUI(); draw();
+    };
+    ov.querySelector('#scPickSrc').onclick = function () {
+      if (!imgs.base) { setStatus('Import base satellite image first.', true); return; }
+      cloneCfg.pickMode = true;
+      setTool('clone');
+      setStatus('Click any clean soil/ground point on the satellite image to set Clone Source.', false);
+    };
+    ov.querySelector('#scUseErase').onclick = function () { setTool('erase'); };
+    ov.querySelector('#scRad').oninput = function () {
+      var v = +this.value; cloneCfg.radius = v; eraseCfg.radius = v;
+      ov.querySelector('#scRadV').textContent = v; draw();
+    };
+    ov.querySelector('#scFea').oninput = function () {
+      var v = (+this.value) / 100; cloneCfg.feather = v; eraseCfg.feather = v;
+      ov.querySelector('#scFeaV').textContent = this.value; draw();
+    };
+    ov.querySelector('#scBop').oninput = function () {
+      var v = (+this.value) / 100; cloneCfg.opacity = v; eraseCfg.opacity = v;
+      ov.querySelector('#scBopV').textContent = this.value;
+    };
+    ov.querySelector('#scProt').oninput = function () {
+      cloneCfg.rotDeg = +this.value;
+      ov.querySelector('#scProtV').textContent = this.value;
+    };
+    ov.querySelector('#scFollow').onchange = function () { cloneCfg.followDrag = !!this.checked; };
+    ov.querySelector('#scClrPatches').onclick = function () {
+      if (!doc.patches.length) return;
+      pushUndo(); doc.patches = []; cleanupDirty = true; persistToIDB(); syncUI(); draw();
+    };
+    ov.querySelector('#scClrErases').onclick = function () {
+      if (!doc.cleanupErases.length) return;
+      pushUndo(); doc.cleanupErases = []; cleanupDirty = true; persistToIDB(); syncUI(); draw();
+    };
+
+    // Cutout controls
+    ov.querySelector('#scCutFea').oninput = function () {
+      cutFeatherPx = +this.value;
+      ov.querySelector('#scCutFeaV').textContent = this.value;
+    };
+    ov.querySelector('#scCutUndo').onclick = function () { if (cutPts.length) { cutPts.pop(); syncUI(); draw(); } };
+    ov.querySelector('#scCutExec').onclick = extractCutoutFromBase;
+    ov.querySelector('#scCutCan').onclick = function () { cutPts = []; setTool('select'); };
+
+    // Calibration controls
     ov.querySelector('#scPickCal').onclick = function () {
       if (!imgs.base) { setStatus('Import a base satellite image first.', true); return; }
-      calibDraft = { p1: null, p2: null };
-      setTool('calibrate');
+      calibDraft = { p1: null, p2: null }; setTool('calibrate');
       setStatus('Click Point 1 and Point 2 on a known length in the satellite image.', false);
-      syncUI();
     };
     ov.querySelector('#scApplyCal').onclick = function () { applyCalibration(ov.querySelector('#scCalM').value); };
     ov.querySelector('#scResetCal').onclick = clearCalibration;
@@ -840,8 +1871,7 @@ window.SOS = window.SOS || {};
       ov.classList.remove('hide');
       resize();
       if (imgs.base && view.s === 1 && view.ox === 0 && view.oy === 0) fitView();
-      syncUI();
-      draw();
+      syncUI(); draw();
       document.addEventListener('keydown', onKeyDown);
       document.addEventListener('keyup', onKeyUp);
     } catch (err) {
@@ -858,17 +1888,23 @@ window.SOS = window.SOS || {};
   }
 
   function hasData() {
-    return !!(bins.base || bins.cleanup || doc.calibration.pxPerMeter > 0 || doc.patches.length || doc.assets.length);
+    return !!(bins.base || bins.cleanup || doc.calibration.pxPerMeter > 0 || doc.patches.length || doc.cleanupErases.length || doc.assets.length);
   }
 
   function exportState(opts) {
     try {
       var includeHeavy = !opts || opts.includeHeavy !== false;
+      var activeAssetBins = {};
+      if (includeHeavy) {
+        doc.assets.forEach(function (a) {
+          if (a.binId && bins.assets[a.binId]) activeAssetBins[a.binId] = bins.assets[a.binId];
+        });
+      }
       return {
         version: 1,
         doc: JSON.parse(JSON.stringify(doc)),
         bins: includeHeavy
-          ? { base: bins.base, cleanup: bins.cleanup, assets: Object.assign({}, bins.assets) }
+          ? { base: bins.base, cleanup: bins.cleanup, assets: activeAssetBins }
           : { base: null, cleanup: null, assets: {} }
       };
     } catch (err) {
@@ -881,10 +1917,11 @@ window.SOS = window.SOS || {};
     try {
       if (!payload || typeof payload !== 'object') return false;
       opGen++;
+      var snapGen = opGen;
       undoStack = []; redoStack = [];
+      selAssetId = null; cutPts = [];
       doc = mergeDoc(payload.doc || payload);
       var inBins = payload.bins || {};
-      // If loading a lightweight JSON where base is null, preserve current base only if IDs match
       var sameBase = !inBins.base && bins.base && doc.base.id && payload.doc && payload.doc.base && payload.doc.base.id === doc.base.id;
       bins = {
         base: inBins.base || (sameBase ? bins.base : null),
@@ -892,7 +1929,9 @@ window.SOS = window.SOS || {};
         assets: inBins.assets ? Object.assign({}, inBins.assets) : {}
       };
       calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
-      decodeAllImages(function () {
+      decodeAllImages(snapGen, function () {
+        if (snapGen !== opGen) return;
+        cleanupDirty = true;
         persistToIDB();
         if (isOpen) { fitView(); syncUI(); draw(); }
       });
@@ -909,9 +1948,12 @@ window.SOS = window.SOS || {};
       doc = blankDoc();
       bins = blankBins();
       imgs = { base: null, cleanup: null, assets: {} };
+      if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
+      cleanupDirty = true;
       undoStack = []; redoStack = [];
+      selAssetId = null; cutPts = []; measPts = [];
       calibDraft = { p1: null, p2: null };
-      measPts = [];
+      cloneCfg.src = null; cloneCfg.pickMode = false;
       wipeIDB();
       if (!silent) setStatus('Sat Studio data & local IndexedDB cleared.', false);
       if (isOpen) { syncUI(); draw(); }
@@ -920,7 +1962,6 @@ window.SOS = window.SOS || {};
     }
   }
 
-  // Hook into OPSEC Clear Workspace event & start non-blocking IDB hydration
   if (St && St.on) {
     St.on('clear', function () { clearData(true); });
   }
