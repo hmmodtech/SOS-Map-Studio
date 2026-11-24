@@ -461,7 +461,7 @@ window.SOS = window.SOS || {};
               var asp = im.naturalWidth / Math.max(1, im.naturalHeight);
               var wPx = doc.calibration.pxPerMeter > 0
                 ? clamp(12 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.4)
-                : clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.28);
+                : clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.9);
               var hPx = wPx / asp;
               var cleanName = file.name.replace(/\.[^.]+$/, '');
               var ast = normalizeAsset({
