@@ -1,6 +1,7 @@
 window.SOS = window.SOS || {};
 (function (S) {
   var KEY = 'aj_geocad_draft_v1', LEGACY_KEY = 'sos_draft_v1', L = {};
+  var SAT_WARN_MB = 30;
   function blank() {
     return {
       meta: {
@@ -59,7 +60,39 @@ window.SOS = window.SOS || {};
     },
     saveProjectJSON: function () {
       this.project.meta.studio = 'AJ-GeoCAD Studio';
-      var b = new Blob([JSON.stringify(this.project, null, 1)], { type: 'application/json' }), a = document.createElement('a');
+      var out = Object.assign({}, this.project);
+      try {
+        if (S.SatComposer && S.SatComposer.hasData && S.SatComposer.hasData()) {
+          var satFull = S.SatComposer.exportState({ includeHeavy: true });
+          if (satFull) {
+            var estMB = JSON.stringify(satFull).length / (1024 * 1024);
+            if (estMB > SAT_WARN_MB) {
+              var keepFull = confirm(
+                'Sat Studio embedded imagery is ' + estMB.toFixed(1) + ' MB (exceeds ' + SAT_WARN_MB + ' MB safe JSON limit).\n\n' +
+                'OK = Save FULL .ajcad.json (includes full-res satellite imagery)\n' +
+                'Cancel = Save LIGHTWEIGHT .ajcad.json (calibration & metadata only; local browser IndexedDB copy stays intact)'
+              );
+              out.satStudio = keepFull ? satFull : S.SatComposer.exportState({ includeHeavy: false });
+            } else {
+              out.satStudio = satFull;
+            }
+          }
+        }
+      } catch (satErr) {
+        console.warn('SatComposer export fallback (lightweight):', satErr);
+        try {
+          if (S.SatComposer && S.SatComposer.exportState) out.satStudio = S.SatComposer.exportState({ includeHeavy: false });
+        } catch (e2) {}
+      }
+      var jsonStr;
+      try {
+        jsonStr = JSON.stringify(out, null, 1);
+      } catch (memErr) {
+        delete out.satStudio;
+        alert('Project imagery exceeded JSON string memory limit. Saving core CAD project without embedded satellite imagery.');
+        jsonStr = JSON.stringify(out, null, 1);
+      }
+      var b = new Blob([jsonStr], { type: 'application/json' }), a = document.createElement('a');
       a.href = URL.createObjectURL(b);
       a.download = (this.project.meta.name || 'project').replace(/[^\w-]+/g, '_') + '.ajcad.json';
       document.body.appendChild(a); a.click(); a.remove();
@@ -73,7 +106,12 @@ window.SOS = window.SOS || {};
           try {
             var p = JSON.parse(r.result);
             if (!p.meta || !Array.isArray(p.features)) throw new Error('Not a valid .ajcad.json / .sos.json project file');
+            var satData = (p.satStudio && typeof p.satStudio === 'object') ? p.satStudio : null;
+            if ('satStudio' in p) delete p.satStudio;
             self.snapshot(); self.project = self.merge(p);
+            if (satData && S.SatComposer && S.SatComposer.importState) {
+              try { S.SatComposer.importState(satData); } catch (satErr) { console.warn('SatComposer import failed:', satErr); }
+            }
             self.emit('select', null); self.emit('change'); res(self.project);
           } catch (e) { rej(e); }
         };
@@ -86,13 +124,16 @@ window.SOS = window.SOS || {};
       try {
         var s = localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY);
         if (!s) return false;
-        this.snapshot(); this.project = this.merge(JSON.parse(s));
+        var parsed = JSON.parse(s);
+        if (parsed && 'satStudio' in parsed) delete parsed.satStudio;
+        this.snapshot(); this.project = this.merge(parsed);
         this.emit('select', null); this.emit('change'); return true;
       } catch (e) { return false; }
     },
     clearWorkspace: function () {
       try { localStorage.removeItem(KEY); localStorage.removeItem(LEGACY_KEY); } catch (e) {}
       this.undoStack = []; this.redoStack = []; this.project = blank();
+      this.emit('clear');
       this.emit('select', null); this.emit('change');
     }
   };
