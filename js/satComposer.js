@@ -45,7 +45,7 @@ window.SOS = window.SOS || {};
     return { base: null, cleanup: null, assets: {} };
   }
 
-  // Isolated module state (never leaks into St.project or localStorage)
+  // Isolated internal state (never leaks into St.project or localStorage)
   var doc = blankDoc();
   var bins = blankBins();
   var imgs = { base: null, cleanup: null, assets: {} };
@@ -54,7 +54,7 @@ window.SOS = window.SOS || {};
   var idbQueue = Promise.resolve();
   var idbStatus = 'Ready';
 
-  // Offscreen cache for Layer 02_Ground_Cleanup (fast interactive redraw)
+  // Offscreen cache for Layer 02_Ground_Cleanup
   var cleanupCacheCv = null;
   var cleanupCacheScale = 1;
   var cleanupDirty = true;
@@ -75,7 +75,6 @@ window.SOS = window.SOS || {};
   var cloneCfg = { src: null, pickMode: false, radius: 28, feather: 0.65, opacity: 1.0, rotDeg: 0, followDrag: true };
   var eraseCfg = { radius: 28, feather: 0.65, opacity: 1.0 };
   var statusMsg = 'Import a full-resolution satellite image to begin.';
-  var statusErr = false;
 
   // =========================================================================
   // SERIALIZED FAIL-SAFE INDEXEDDB STORAGE
@@ -293,8 +292,10 @@ window.SOS = window.SOS || {};
             doc.base.height = im.naturalHeight;
           } else if (t.kind === 'cleanup') {
             imgs.cleanup = im;
-            doc.cleanupImage.width = im.naturalWidth;
-            doc.cleanupImage.height = im.naturalHeight;
+            if (doc.cleanupImage.id) {
+              doc.cleanupImage.width = im.naturalWidth;
+              doc.cleanupImage.height = im.naturalHeight;
+            }
           } else if (t.kind === 'asset') {
             imgs.assets[t.id] = im;
           }
@@ -307,7 +308,6 @@ window.SOS = window.SOS || {};
 
   function setStatus(msg, isErr) {
     statusMsg = msg;
-    statusErr = !!isErr;
     if (ov) {
       var el = ov.querySelector('#scStatus');
       if (el) {
@@ -315,6 +315,10 @@ window.SOS = window.SOS || {};
         el.style.color = isErr ? 'var(--danger, #ff4757)' : 'var(--glow-cyan, #00e5ff)';
       }
     }
+  }
+
+  function hasActiveCleanupImg() {
+    return !!(doc.cleanupImage && doc.cleanupImage.id && imgs.cleanup);
   }
 
   function getSelAsset() {
@@ -411,59 +415,67 @@ window.SOS = window.SOS || {};
     if (!fileList || !fileList.length) return;
     if (!imgs.base) { setStatus('Import 01_Base_Satellite first before adding assets.', true); return; }
     var files = [].slice.call(fileList);
-    var loaded = 0;
+    var doneCount = 0, addedCount = 0;
     pushUndo();
     files.forEach(function (file, idx) {
       try {
         var reader = new FileReader();
+        reader.onerror = function () { doneCount++; finishCheck(); };
         reader.onload = function () {
           var dataUrl = reader.result;
           decodeImage(dataUrl, function (err, im) {
-            if (err || !im || !im.naturalWidth) return;
-            var binId = uid('abin');
-            bins.assets[binId] = dataUrl;
-            imgs.assets[binId] = im;
-            var ctr = s2i(W / 2, H / 2);
-            ctr.x = clamp(ctr.x, 0, imgs.base.naturalWidth) + idx * 18;
-            ctr.y = clamp(ctr.y, 0, imgs.base.naturalHeight) + idx * 18;
-            var asp = im.naturalWidth / Math.max(1, im.naturalHeight);
-            var wPx;
-            if (doc.calibration.pxPerMeter > 0) {
-              wPx = clamp(12 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.4);
-            } else {
-              wPx = clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.28);
+            if (!err && im && im.naturalWidth) {
+              var binId = uid('abin');
+              bins.assets[binId] = dataUrl;
+              imgs.assets[binId] = im;
+              var ctr = s2i(W / 2, H / 2);
+              ctr.x = clamp(ctr.x, 0, imgs.base.naturalWidth) + idx * 18;
+              ctr.y = clamp(ctr.y, 0, imgs.base.naturalHeight) + idx * 18;
+              var asp = im.naturalWidth / Math.max(1, im.naturalHeight);
+              var wPx = doc.calibration.pxPerMeter > 0
+                ? clamp(12 * doc.calibration.pxPerMeter, 24, imgs.base.naturalWidth * 0.4)
+                : clamp(im.naturalWidth, 32, imgs.base.naturalWidth * 0.28);
+              var hPx = wPx / asp;
+              var cleanName = file.name.replace(/\.[^.]+$/, '');
+              var ast = normalizeAsset({
+                id: uid('ast'),
+                binId: binId,
+                name: cleanName || 'PNG Asset',
+                source: 'png',
+                naturalW: im.naturalWidth,
+                naturalH: im.naturalHeight,
+                x: +ctr.x.toFixed(2),
+                y: +ctr.y.toFixed(2),
+                wPx: +wPx.toFixed(2),
+                hPx: +hPx.toFixed(2)
+              });
+              doc.assets.push(ast);
+              doc.layers.assets.visible = true;
+              selAssetId = ast.id;
+              addedCount++;
             }
-            var hPx = wPx / asp;
-            var cleanName = file.name.replace(/\.[^.]+$/, '');
-            var ast = normalizeAsset({
-              id: uid('ast'),
-              binId: binId,
-              name: cleanName || 'PNG Asset',
-              source: 'png',
-              naturalW: im.naturalWidth,
-              naturalH: im.naturalHeight,
-              x: +ctr.x.toFixed(2),
-              y: +ctr.y.toFixed(2),
-              wPx: +wPx.toFixed(2),
-              hPx: +hPx.toFixed(2)
-            });
-            doc.assets.push(ast);
-            doc.layers.assets.visible = true;
-            selAssetId = ast.id;
-            loaded++;
-            if (loaded === files.length) {
-              persistToIDB();
-              setTool('select');
-              setStatus('Added ' + loaded + ' PNG asset(s) to 03_Movable_Assets. Drag corners to resize or top handle to rotate.', false);
-              syncUI(); draw();
-            }
+            doneCount++;
+            finishCheck();
           });
         };
         reader.readAsDataURL(file);
       } catch (e) {
-        setStatus('Asset import error: ' + e.message, true);
+        doneCount++;
+        finishCheck();
       }
     });
+    function finishCheck() {
+      if (doneCount === files.length) {
+        if (addedCount > 0) {
+          persistToIDB();
+          setTool('select');
+          setStatus('Added ' + addedCount + ' PNG asset(s) to 03_Movable_Assets. Drag corners to resize or top handle to rotate.', false);
+        } else {
+          setStatus('No valid image files could be decoded.', true);
+        }
+        syncUI(); draw();
+      }
+    }
   }
 
   // =========================================================================
@@ -490,13 +502,13 @@ window.SOS = window.SOS || {};
       if (bw < 4 || bh < 4) { setStatus('Cutout polygon is too small.', true); return; }
       if (bw > MAX_SAFE_EDGE || bh > MAX_SAFE_EDGE) { setStatus('Cutout exceeds safe canvas edge limit.', true); return; }
 
-      // 1. Copy exact 1:1 natural pixels from 01_Base_Satellite
+      // 1. Copy exact 1:1 natural pixels directly from 01_Base_Satellite
       cutCv = document.createElement('canvas');
       cutCv.width = bw; cutCv.height = bh;
       var cctx = cutCv.getContext('2d');
       cctx.drawImage(imgs.base, x0, y0, bw, bh, 0, 0, bw, bh);
 
-      // 2. Build 1:1 alpha mask (with optional soft edge feathering)
+      // 2. Build 1:1 alpha polygon mask (with optional soft edge feather)
       maskCv = document.createElement('canvas');
       maskCv.width = bw; maskCv.height = bh;
       var mctx = maskCv.getContext('2d');
@@ -517,7 +529,6 @@ window.SOS = window.SOS || {};
       cctx.globalCompositeOperation = 'source-over';
 
       var pngUrl = cutCv.toDataURL('image/png');
-      // Release temporary canvases immediately
       cutCv.width = 0; cutCv.height = 0;
       maskCv.width = 0; maskCv.height = 0;
 
@@ -546,7 +557,7 @@ window.SOS = window.SOS || {};
         cutPts = [];
         persistToIDB();
         setTool('select');
-        setStatus('Extracted 1:1 cutout (' + bw + 'x' + bh + ' px). Drag & rotate to Location B, then click "Clean Old Spot (A)" in Inspector.', false);
+        setStatus('Extracted 1:1 cutout (' + bw + 'x' + bh + ' px). Move/rotate to Spot (B), then click "Clean Old Spot (A)".', false);
         syncUI(); draw();
       });
     } catch (e) {
@@ -557,7 +568,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // LAYER 02_GROUND_CLEANUP COMPOSITOR (PRE-CLEANED + CLONE PATCHES + ERASER)
+  // LAYER 02_GROUND_CLEANUP COMPOSITOR (INCREMENTAL CACHE + FULL REBUILD)
   // =========================================================================
   function stampClonePatch(targetCtx, p, scale) {
     if (!imgs.base) return;
@@ -570,7 +581,6 @@ window.SOS = window.SOS || {};
     var pctx = patchScratchCv.getContext('2d');
     pctx.clearRect(0, 0, d, d);
 
-    // Safe cropped source rect in 1:1 natural base image coordinates
     var rrNat = Math.ceil(p.r * 1.5) + 2;
     var bx0 = Math.max(0, Math.floor(p.sx - rrNat));
     var by0 = Math.max(0, Math.floor(p.sy - rrNat));
@@ -585,7 +595,6 @@ window.SOS = window.SOS || {};
     pctx.drawImage(imgs.base, bx0, by0, bw, bh, (bx0 - p.sx) * scale, (by0 - p.sy) * scale, bw * scale, bh * scale);
     pctx.restore();
 
-    // Soft radial feather alpha mask
     var fe = clamp(p.feather != null ? p.feather : 0.65, 0.02, 1);
     var rIn = Math.max(0, r * (1 - fe));
     var grad = pctx.createRadialGradient(d / 2, d / 2, rIn, d / 2, d / 2, r);
@@ -602,51 +611,53 @@ window.SOS = window.SOS || {};
     targetCtx.restore();
   }
 
-  function applySoftEraseStroke(targetCtx, st, scale) {
-    if (!st || !st.pts || !st.pts.length) return;
-    var r = Math.max(2, st.r * scale);
-    var fe = clamp(st.feather != null ? st.feather : 0.65, 0.02, 1);
+  function applyEraseDab(targetCtx, x, y, r, rIn, op) {
+    var g = targetCtx.createRadialGradient(x, y, rIn, x, y, r);
+    g.addColorStop(0, 'rgba(0,0,0,' + op + ')');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    targetCtx.fillStyle = g;
+    targetCtx.beginPath();
+    targetCtx.arc(x, y, r, 0, Math.PI * 2);
+    targetCtx.fill();
+  }
+
+  function applyEraseSegment(targetCtx, ptA, ptB, cfg, scale, includeStart) {
+    var r = Math.max(2, cfg.r * scale);
+    var fe = clamp(cfg.feather != null ? cfg.feather : 0.65, 0.02, 1);
     var rIn = Math.max(0, r * (1 - fe));
-    var op = clamp(st.opacity != null ? st.opacity : 1, 0.05, 1);
+    var op = clamp(cfg.opacity != null ? cfg.opacity : 1, 0.05, 1);
     var step = Math.max(2, r * 0.26);
-
-    function dab(x, y) {
-      var g = targetCtx.createRadialGradient(x, y, rIn, x, y, r);
-      g.addColorStop(0, 'rgba(0,0,0,' + op + ')');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      targetCtx.fillStyle = g;
-      targetCtx.beginPath();
-      targetCtx.arc(x, y, r, 0, Math.PI * 2);
-      targetCtx.fill();
-    }
-
+    var x0 = ptA.x * scale, y0 = ptA.y * scale;
     targetCtx.save();
     targetCtx.globalCompositeOperation = 'destination-out';
-    var pts = st.pts;
-    dab(pts[0].x * scale, pts[0].y * scale);
-    for (var i = 1; i < pts.length; i++) {
-      var x0 = pts[i - 1].x * scale, y0 = pts[i - 1].y * scale;
-      var x1 = pts[i].x * scale, y1 = pts[i].y * scale;
+    if (includeStart) applyEraseDab(targetCtx, x0, y0, r, rIn, op);
+    if (ptB) {
+      var x1 = ptB.x * scale, y1 = ptB.y * scale;
       var dist = Math.hypot(x1 - x0, y1 - y0);
       var n = Math.max(1, Math.ceil(dist / step));
       for (var k = 1; k <= n; k++) {
         var t = k / n;
-        dab(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+        applyEraseDab(targetCtx, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, r, rIn, op);
       }
     }
     targetCtx.restore();
   }
 
+  function applySoftEraseStroke(targetCtx, st, scale) {
+    if (!st || !st.pts || !st.pts.length) return;
+    applyEraseSegment(targetCtx, st.pts[0], null, st, scale, true);
+    for (var i = 1; i < st.pts.length; i++) {
+      applyEraseSegment(targetCtx, st.pts[i - 1], st.pts[i], st, scale, false);
+    }
+  }
+
   function renderCleanupLayerTo(targetCtx, targetW, targetH, scale) {
-    // 1. Pre-cleaned external ground image (fitted 1:1 to base bounds)
-    if (imgs.cleanup) {
+    if (hasActiveCleanupImg()) {
       targetCtx.drawImage(imgs.cleanup, 0, 0, targetW, targetH);
     }
-    // 2. Procedural soft-feathered clone patches from 01_Base_Satellite
     for (var i = 0; i < doc.patches.length; i++) {
       stampClonePatch(targetCtx, doc.patches[i], scale);
     }
-    // 3. Soft eraser strokes revealing 01_Base_Satellite underneath
     for (var j = 0; j < doc.cleanupErases.length; j++) {
       applySoftEraseStroke(targetCtx, doc.cleanupErases[j], scale);
     }
@@ -654,7 +665,7 @@ window.SOS = window.SOS || {};
 
   function ensureCleanupCache() {
     if (!imgs.base) return null;
-    if (!imgs.cleanup && !doc.patches.length && !doc.cleanupErases.length) {
+    if (!hasActiveCleanupImg() && !doc.patches.length && !doc.cleanupErases.length) {
       if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
       cleanupDirty = false;
       return null;
@@ -677,6 +688,25 @@ window.SOS = window.SOS || {};
     } catch (e) {
       setStatus('Cleanup layer cache error: ' + e.message, true);
       return null;
+    }
+  }
+
+  // Incremental live stamping for 60 FPS clone/erase strokes
+  function incrementalStampPatch(p) {
+    if (cleanupDirty || !cleanupCacheCv) {
+      cleanupDirty = true;
+      ensureCleanupCache();
+    } else {
+      stampClonePatch(cleanupCacheCv.getContext('2d'), p, cleanupCacheScale);
+    }
+  }
+
+  function incrementalErase(ptA, ptB, stroke, includeStart) {
+    if (cleanupDirty || !cleanupCacheCv) {
+      cleanupDirty = true;
+      ensureCleanupCache();
+    } else {
+      applyEraseSegment(cleanupCacheCv.getContext('2d'), ptA, ptB, stroke, cleanupCacheScale, includeStart);
     }
   }
 
@@ -793,7 +823,7 @@ window.SOS = window.SOS || {};
         ctx.restore();
       }
 
-      // LAYER 02: Ground Cleanup (Pre-cleaned image + Soft Clone Patches + Soft Eraser)
+      // LAYER 02: Ground Cleanup
       if (doc.layers.cleanup.visible) {
         var ccv = ensureCleanupCache();
         if (ccv) {
@@ -825,18 +855,15 @@ window.SOS = window.SOS || {};
         }
       }
 
-      // Base image boundary frame
       ctx.strokeStyle = isDay ? '#0369a1' : '#1b3b57';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(tl[0], tl[1], dw, dh);
 
-      // Selected Asset Transform Gizmo
       var sel = getSelAsset();
       if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan')) {
         drawAssetGizmo(sel);
       }
 
-      // Active Tool Overlays
       if (tool === 'clone') drawCloneOverlay();
       if (tool === 'erase') drawEraserOverlay();
       if (tool === 'cutout') drawCutoutOverlay();
@@ -870,13 +897,11 @@ window.SOS = window.SOS || {};
     ctx.setLineDash([]);
 
     if (!a.locked) {
-      // Rotation stem + handle
       ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.moveTo(topM[0], topM[1]); ctx.lineTo(rotP[0], rotP[1]); ctx.stroke();
       ctx.beginPath(); ctx.arc(rotP[0], rotP[1], 6, 0, Math.PI * 2);
       ctx.fillStyle = '#040911'; ctx.fill(); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.stroke();
 
-      // 4 Corner resize squares
       pts.forEach(function (p) {
         ctx.fillStyle = '#040911'; ctx.strokeStyle = '#00ff9d'; ctx.lineWidth = 2;
         ctx.fillRect(p[0] - 5, p[1] - 5, 10, 10);
@@ -884,7 +909,6 @@ window.SOS = window.SOS || {};
       });
     }
 
-    // Live dimension/angle tag
     var dimTxt = a.name;
     if (doc.calibration.pxPerMeter > 0) {
       dimTxt += ' • ' + (a.wPx / doc.calibration.pxPerMeter).toFixed(1) + 'x' + (a.hPx / doc.calibration.pxPerMeter).toFixed(1) + ' m';
@@ -1142,7 +1166,6 @@ window.SOS = window.SOS || {};
         return;
       }
 
-      // SELECT / TRANSFORM ASSETS
       if (tool === 'select') {
         var sel = getSelAsset();
         var hk = hitAssetHandle(sel, p);
@@ -1174,7 +1197,6 @@ window.SOS = window.SOS || {};
         syncUI(); draw(); return;
       }
 
-      // CLONE PATCH (SOFT-FEATHERED SOIL STAMP)
       if (tool === 'clone') {
         if (e.altKey || cloneCfg.pickMode || !cloneCfg.src) {
           cloneCfg.src = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
@@ -1192,32 +1214,31 @@ window.SOS = window.SOS || {};
           opacity: cloneCfg.opacity, rotDeg: cloneCfg.rotDeg
         };
         doc.patches.push(p0);
-        cleanupDirty = true;
+        incrementalStampPatch(p0);
         drag = { m: 'clone', startSrc: { x: cloneCfg.src.x, y: cloneCfg.src.y }, startDst: ip, lastDst: ip };
         draw(); return;
       }
 
-      // SOFT ERASER ON LAYER 02_GROUND_CLEANUP
       if (tool === 'erase') {
-        if (!imgs.cleanup && !doc.patches.length) {
+        if (!hasActiveCleanupImg() && !doc.patches.length) {
           setStatus('Nothing on 02_Ground_Cleanup to erase yet.', true);
           return;
         }
         pushUndo();
+        var pt0 = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
         var st = {
           id: uid('ers'),
           r: eraseCfg.radius,
           feather: eraseCfg.feather,
           opacity: eraseCfg.opacity,
-          pts: [{ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }]
+          pts: [pt0]
         };
         doc.cleanupErases.push(st);
-        cleanupDirty = true;
-        drag = { m: 'erase', stroke: st, last: ip };
+        incrementalErase(pt0, null, st, true);
+        drag = { m: 'erase', stroke: st, last: pt0 };
         draw(); return;
       }
 
-      // CUT & RELOCATE POLYGON (A -> B)
       if (tool === 'cutout') {
         if (cutPts.length >= 3) {
           var firstSp = i2s(cutPts[0].x, cutPts[0].y);
@@ -1231,7 +1252,6 @@ window.SOS = window.SOS || {};
         syncUI(); draw(); return;
       }
 
-      // CALIBRATE SCALE (2-PT)
       if (tool === 'calibrate') {
         if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) {
           calibDraft = { p1: ip, p2: null };
@@ -1244,7 +1264,6 @@ window.SOS = window.SOS || {};
         syncUI(); draw(); return;
       }
 
-      // MEASURE
       if (tool === 'measure') {
         if (measPts.length >= 2) measPts = [];
         measPts.push(ip);
@@ -1300,21 +1319,23 @@ window.SOS = window.SOS || {};
         if (Math.hypot(ip.x - drag.lastDst.x, ip.y - drag.lastDst.y) >= spacing) {
           var sx = cloneCfg.followDrag ? (drag.startSrc.x + (ip.x - drag.startDst.x)) : drag.startSrc.x;
           var sy = cloneCfg.followDrag ? (drag.startSrc.y + (ip.y - drag.startDst.y)) : drag.startSrc.y;
-          doc.patches.push({
+          var ptc = {
             id: uid('ptc'),
             sx: +sx.toFixed(2), sy: +sy.toFixed(2),
             dx: +ip.x.toFixed(2), dy: +ip.y.toFixed(2),
             r: cloneCfg.radius, feather: cloneCfg.feather,
             opacity: cloneCfg.opacity, rotDeg: cloneCfg.rotDeg
-          });
+          };
+          doc.patches.push(ptc);
+          incrementalStampPatch(ptc);
           drag.lastDst = ip;
-          cleanupDirty = true;
         }
       } else if (drag.m === 'erase') {
         if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(3, eraseCfg.radius * 0.22)) {
-          drag.stroke.pts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
-          drag.last = ip;
-          cleanupDirty = true;
+          var nxt = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
+          drag.stroke.pts.push(nxt);
+          incrementalErase(drag.last, nxt, drag.stroke, false);
+          drag.last = nxt;
         }
       }
       draw();
@@ -1562,7 +1583,6 @@ window.SOS = window.SOS || {};
     syncUndoBtns();
     setIdbBadge(idbStatus);
 
-    // 01_Base_Satellite Info
     var bi = ov.querySelector('#scBaseInfo');
     if (imgs.base && doc.base.width) {
       var mp = (doc.base.width * doc.base.height) / 1e6;
@@ -1575,24 +1595,22 @@ window.SOS = window.SOS || {};
       bi.innerHTML = '<span class="mut">No base satellite image loaded yet.</span>';
     }
 
-    // Layers visibility & opacity
     ov.querySelector('#scLayBase').checked = !!doc.layers.base.visible;
     ov.querySelector('#scLayClean').checked = !!doc.layers.cleanup.visible;
     ov.querySelector('#scLayAssets').checked = !!doc.layers.assets.visible;
     ov.querySelector('#scLayOver').checked = !!doc.layers.overlays.visible;
-    ov.querySelector('#scCleanOp').value = Math.round((doc.layers.cleanup.opacity != null ? doc.layers.cleanup.opacity : 1) * 100);
-    ov.querySelector('#scCleanOpV').textContent = Math.round((doc.layers.cleanup.opacity != null ? doc.layers.cleanup.opacity : 1) * 100);
+    var cop = Math.round((doc.layers.cleanup.opacity != null ? doc.layers.cleanup.opacity : 1) * 100);
+    ov.querySelector('#scCleanOp').value = cop;
+    ov.querySelector('#scCleanOpV').textContent = cop;
 
-    // 02_Ground_Cleanup info & controls
     ov.querySelector('#scCleanStat').textContent =
-      (imgs.cleanup ? ('Image: ' + doc.cleanupImage.name) : 'Image: None') +
+      (hasActiveCleanupImg() ? ('Image: ' + doc.cleanupImage.name) : 'Image: None') +
       ' | Patches: ' + doc.patches.length + ' | Erases: ' + doc.cleanupErases.length;
     ov.querySelector('#scSrcStat').textContent = cloneCfg.src
       ? ('Source: (' + Math.round(cloneCfg.src.x) + ', ' + Math.round(cloneCfg.src.y) + ')')
       : 'Source: Not picked (Alt+Click)';
     ov.querySelector('#scPickSrc').classList.toggle('on', !!cloneCfg.pickMode);
 
-    // 03_Movable_Assets list (topmost first in UI)
     var al = ov.querySelector('#scAssetList');
     if (!doc.assets.length) {
       al.innerHTML = '<div class="mut">No assets yet. Import PNGs or use Cut &amp; Relocate (A➔B).</div>';
@@ -1621,15 +1639,12 @@ window.SOS = window.SOS || {};
       });
     }
 
-    // Cutout contextual box
     var cutBox = ov.querySelector('#scCutBox');
     cutBox.style.display = tool === 'cutout' ? 'flex' : 'none';
     ov.querySelector('#scCutPtsV').textContent = String(cutPts.length);
 
-    // Asset Inspector
     renderAssetInspector();
 
-    // Calibration card
     var p1 = calibDraft.p1 || doc.calibration.p1;
     var p2 = calibDraft.p2 || doc.calibration.p2;
     var pxD = (p1 && p2) ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
@@ -1745,7 +1760,6 @@ window.SOS = window.SOS || {};
     ctx = cv.getContext('2d');
     bindCanvas();
 
-    // File pickers
     var fBase = ov.querySelector('#scFileBase');
     var fClean = ov.querySelector('#scFileCleanup');
     var fAsset = ov.querySelector('#scFileAsset');
@@ -1762,7 +1776,6 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scAddPng2').onclick = pickAsset;
     fAsset.onchange = function () { if (this.files && this.files.length) importAssetFiles(this.files); };
 
-    // Top bar tools & navigation
     [].forEach.call(ov.querySelectorAll('[data-sctool]'), function (b) {
       b.onclick = function () { setTool(b.dataset.sctool); };
     });
@@ -1780,7 +1793,6 @@ window.SOS = window.SOS || {};
       if (confirm('Clear ALL Sat Studio layers, assets, and local IndexedDB data? (Your CAD map stays untouched)')) clearData(false);
     };
 
-    // Layer toggles
     function bindLay(id, key) {
       ov.querySelector(id).onchange = function () { pushUndo(); doc.layers[key].visible = !!this.checked; persistToIDB(); draw(); };
     }
@@ -1798,10 +1810,9 @@ window.SOS = window.SOS || {};
     };
     ov.querySelector('#scCleanOp').onchange = function () { clnOpPushed = false; persistToIDB(); };
 
-    // Cleanup tools controls
     ov.querySelector('#scClrCleanImg').onclick = function () {
-      if (!imgs.cleanup) return;
-      pushUndo(); bins.cleanup = null; imgs.cleanup = null;
+      if (!hasActiveCleanupImg()) return;
+      pushUndo();
       doc.cleanupImage = { id: null, name: '', width: 0, height: 0 };
       cleanupDirty = true; persistToIDB(); syncUI(); draw();
     };
@@ -1838,7 +1849,6 @@ window.SOS = window.SOS || {};
       pushUndo(); doc.cleanupErases = []; cleanupDirty = true; persistToIDB(); syncUI(); draw();
     };
 
-    // Cutout controls
     ov.querySelector('#scCutFea').oninput = function () {
       cutFeatherPx = +this.value;
       ov.querySelector('#scCutFeaV').textContent = this.value;
@@ -1847,7 +1857,6 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scCutExec').onclick = extractCutoutFromBase;
     ov.querySelector('#scCutCan').onclick = function () { cutPts = []; setTool('select'); };
 
-    // Calibration controls
     ov.querySelector('#scPickCal').onclick = function () {
       if (!imgs.base) { setStatus('Import a base satellite image first.', true); return; }
       calibDraft = { p1: null, p2: null }; setTool('calibrate');
@@ -1888,7 +1897,7 @@ window.SOS = window.SOS || {};
   }
 
   function hasData() {
-    return !!(bins.base || bins.cleanup || doc.calibration.pxPerMeter > 0 || doc.patches.length || doc.cleanupErases.length || doc.assets.length);
+    return !!(bins.base || hasActiveCleanupImg() || doc.calibration.pxPerMeter > 0 || doc.patches.length || doc.cleanupErases.length || doc.assets.length);
   }
 
   function exportState(opts) {
@@ -1904,7 +1913,7 @@ window.SOS = window.SOS || {};
         version: 1,
         doc: JSON.parse(JSON.stringify(doc)),
         bins: includeHeavy
-          ? { base: bins.base, cleanup: bins.cleanup, assets: activeAssetBins }
+          ? { base: bins.base, cleanup: hasActiveCleanupImg() ? bins.cleanup : null, assets: activeAssetBins }
           : { base: null, cleanup: null, assets: {} }
       };
     } catch (err) {
