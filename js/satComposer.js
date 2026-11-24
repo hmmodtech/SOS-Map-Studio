@@ -67,7 +67,7 @@ window.SOS = window.SOS || {};
   var ov = null, cv = null, ctx = null, built = false, isOpen = false;
   var W = 1, H = 1, dpr = 1;
   var view = { s: 1, ox: 0, oy: 0 };
-  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'pin' | 'calibrate' | 'measure'
+  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'futsal_rect' | 'building_add' | 'tent_add' | 'tree_add' | 'poly_draw' | 'pin' | 'calibrate' | 'measure'
   var selAssetId = null;
   var selPinId = null;
   var pinCat = 'bldg';
@@ -592,6 +592,118 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
+  // PROCEDURAL FUTSAL PITCH + RED TOP NET, BUILDINGS, TENTS, TREES & POLYGONS
+  // =========================================================================
+  function addProceduralAssetToScene(name, kind, dataUrl, cx, cy, wPx, hPx, rotDeg, elevM, castSh) {
+    decodeImage(dataUrl, function (err, im) {
+      if (err || !im || !im.naturalWidth) { setStatus('Procedural asset decode failed.', true); return; }
+      pushUndo();
+      var binId = uid('pbin');
+      bins.assets[binId] = dataUrl;
+      imgs.assets[binId] = im;
+      var ast = normalizeAsset({
+        id: uid('ast'),
+        binId: binId,
+        name: name,
+        source: kind || 'png',
+        naturalW: im.naturalWidth,
+        naturalH: im.naturalHeight,
+        x: +cx.toFixed(2),
+        y: +cy.toFixed(2),
+        wPx: +Math.max(16, wPx).toFixed(2),
+        hPx: +Math.max(16, hPx).toFixed(2),
+        rotationDeg: +(((rotDeg || 0) % 360 + 360) % 360).toFixed(1),
+        elevationM: elevM != null ? elevM : 3.0,
+        shadowEnabled: castSh !== false
+      });
+      doc.assets.push(ast);
+      doc.layers.assets.visible = true;
+      selAssetId = ast.id;
+      persistToIDB();
+      setTool('select');
+      syncUI(); draw();
+    });
+  }
+
+  function createFutsalFromRect(p1, p2) {
+    if (!S.SatProcedural || !imgs.base) return;
+    var quad = S.SatProcedural.makeOrientedRect(p1, p2);
+    if (!quad) return;
+    var c = S.SatProcedural.polyCenter(quad);
+    var lenPx = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    var widPx = Math.max(16, lenPx * 0.60);
+    var rotDeg = Math.atan2(p2.y - p1.y, p2.x - p1.x) / D;
+    var ppm = doc.calibration.pxPerMeter || 0;
+    var wM = ppm > 0 ? (lenPx / ppm) : 30;
+    var hM = ppm > 0 ? (widPx / ppm) : 18;
+    var fenceH = ppm > 0 ? Math.min(3.5, Math.max(2.0, hM * 0.14)) : 3.0;
+
+    var url = S.SatProcedural.getCachedProceduralUrl(
+      'futsal|' + Math.round(lenPx) + 'x' + Math.round(widPx),
+      function () { return S.SatProcedural.renderFutsalAssetCanvas({ wPx: lenPx, hPx: widPx }); }
+    );
+    addProceduralAssetToScene(
+      'Futsal Pitch + Red Net (' + wM.toFixed(0) + '×' + hM.toFixed(0) + 'm)',
+      'futsal', url, c.x, c.y, lenPx, widPx, rotDeg, fenceH, true
+    );
+    setStatus('Added un-grassed futsal pitch with chain-link + red top net & global shadow.', false);
+  }
+
+  function addBuildingAt(imgPt) {
+    if (!S.SatProcedural || !imgs.base) { setStatus('Import 01_Base_Satellite first.', true); return; }
+    var ppm = doc.calibration.pxPerMeter || 0;
+    var wPx = ppm > 0 ? clamp(10 * ppm, 24, imgs.base.naturalWidth * 0.35) : clamp(imgs.base.naturalWidth * 0.08, 36, 180);
+    var hPx = wPx * 0.65;
+    var url = S.SatProcedural.getCachedProceduralUrl(
+      'bldg|' + Math.round(wPx) + 'x' + Math.round(hPx),
+      function () { return S.SatProcedural.renderBuildingAssetCanvas({ wPx: wPx, hPx: hPx }); }
+    );
+    var idx = doc.assets.filter(function (a) { return a.source === 'bldg'; }).length + 1;
+    addProceduralAssetToScene('Building #' + idx, 'bldg', url, imgPt.x, imgPt.y, wPx, hPx, 0, 4.5, true);
+    setStatus('Added Building #' + idx + '. Drag to move, handle to rotate, or set exact meters in Inspector.', false);
+  }
+
+  function addTentAt(imgPt) {
+    if (!S.SatProcedural || !imgs.base) { setStatus('Import 01_Base_Satellite first.', true); return; }
+    var ppm = doc.calibration.pxPerMeter || 0;
+    var wPx = ppm > 0 ? clamp(4.5 * ppm, 18, imgs.base.naturalWidth * 0.3) : clamp(imgs.base.naturalWidth * 0.055, 22, 140);
+    var hPx = wPx;
+    var url = S.SatProcedural.getCachedProceduralUrl(
+      'tent|' + Math.round(wPx) + 'x' + Math.round(hPx),
+      function () { return S.SatProcedural.renderTentAssetCanvas({ wPx: wPx, hPx: hPx }); }
+    );
+    var idx = doc.assets.filter(function (a) { return a.source === 'tent'; }).length + 1;
+    addProceduralAssetToScene('Tent #' + idx, 'tent', url, imgPt.x, imgPt.y, wPx, hPx, 0, 2.6, true);
+    setStatus('Added Tent #' + idx + '. Drag to move, handle to rotate, or edit Width/Height (m) in Inspector.', false);
+  }
+
+  function addTreeAt(imgPt) {
+    if (!S.SatProcedural || !imgs.base) { setStatus('Import 01_Base_Satellite first.', true); return; }
+    var ppm = doc.calibration.pxPerMeter || 0;
+    var dPx = ppm > 0 ? clamp(5.5 * ppm, 18, imgs.base.naturalWidth * 0.25) : clamp(imgs.base.naturalWidth * 0.05, 22, 120);
+    var idx = doc.assets.filter(function (a) { return a.source === 'tree'; }).length + 1;
+    var seedVal = 4200 + idx * 97;
+    var url = S.SatProcedural.getCachedProceduralUrl(
+      'tree|' + Math.round(dPx) + '|' + seedVal,
+      function () { return S.SatProcedural.renderTreeAssetCanvas({ dPx: dPx, seed: seedVal }); }
+    );
+    addProceduralAssetToScene('Tree #' + idx, 'tree', url, imgPt.x, imgPt.y, dPx, dPx, 0, 5.0, true);
+    setStatus('Added natural Tree #' + idx + ' with foliage canopy & sun shadow.', false);
+  }
+
+  function finalizeFreePolygon() {
+    if (!S.SatProcedural || !imgs.base || cutPts.length < 3) {
+      setStatus('Click at least 3 polygon points first.', true); return;
+    }
+    var res = S.SatProcedural.renderPolygonAssetFromPoints(imgs.base, cutPts, null, 'rgba(0,229,255,0.85)');
+    cutPts = [];
+    if (!res) { setStatus('Polygon too large or invalid.', true); return; }
+    var idx = doc.assets.filter(function (a) { return a.source === 'poly'; }).length + 1;
+    addProceduralAssetToScene('Polygon #' + idx, 'poly', res.dataUrl, res.cx, res.cy, res.wPx, res.hPx, 0, 0, false);
+    setStatus('Created Polygon #' + idx + '. Move, resize, or rotate it freely.', false);
+  }
+
+  // =========================================================================
   // LAYER 02_GROUND_CLEANUP COMPOSITOR (INCREMENTAL CACHE + FULL REBUILD)
   // =========================================================================
   function stampClonePatch(targetCtx, p, scale) {
@@ -827,7 +939,7 @@ window.SOS = window.SOS || {};
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('SAT STUDIO READY — IMPORT HIGH-RES SATELLITE IMAGE (01_Base_Satellite)', W / 2, H / 2 - 12);
         ctx.font = '11px ' + MONO;
-        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • PNG Assets • Cut & Relocate • Dual Export', W / 2, H / 2 + 12);
+        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • Futsal + Red Net • Buildings, Tents, Trees & Polygons', W / 2, H / 2 + 12);
         return;
       }
 
@@ -914,7 +1026,21 @@ window.SOS = window.SOS || {};
 
       if (tool === 'clone') drawCloneOverlay();
       if (tool === 'erase') drawEraserOverlay();
-      if (tool === 'cutout') drawCutoutOverlay();
+      if (tool === 'cutout' || tool === 'poly_draw') drawCutoutOverlay();
+
+      if (tool === 'futsal_rect' && drag && drag.m === 'futsal_rect' && S.SatProcedural) {
+        var q = S.SatProcedural.makeOrientedRect(drag.p1, drag.p2);
+        if (q) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(201,174,130,0.35)';
+          ctx.strokeStyle = '#dc2626';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          q.forEach(function (pt, idx) { var sp = i2s(pt.x, pt.y); if (idx === 0) ctx.moveTo(sp[0], sp[1]); else ctx.lineTo(sp[0], sp[1]); });
+          ctx.closePath(); ctx.fill(); ctx.stroke();
+          ctx.restore();
+        }
+      }
 
       var cp1 = calibDraft.p1 || (tool === 'calibrate' ? doc.calibration.p1 : null);
       var cp2 = calibDraft.p2 || (tool === 'calibrate' ? doc.calibration.p2 : null);
@@ -1198,6 +1324,7 @@ window.SOS = window.SOS || {};
     cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     cv.addEventListener('dblclick', function () {
       if (tool === 'cutout' && cutPts.length >= 3) extractCutoutFromBase();
+      else if (tool === 'poly_draw' && cutPts.length >= 3) finalizeFreePolygon();
     });
 
     cv.addEventListener('pointerdown', function (e) {
@@ -1306,6 +1433,41 @@ window.SOS = window.SOS || {};
         syncUI(); draw(); return;
       }
 
+      if (tool === 'futsal_rect') {
+        if (!drag || drag.m !== 'futsal_rect') {
+          drag = { m: 'futsal_rect', p1: ip, p2: ip };
+          setStatus('Drag or release to place un-grassed futsal pitch + chain-link + red top net...', false);
+        }
+        draw(); return;
+      }
+
+      if (tool === 'building_add') {
+        addBuildingAt(ip);
+        return;
+      }
+
+      if (tool === 'tent_add') {
+        addTentAt(ip);
+        return;
+      }
+
+      if (tool === 'tree_add') {
+        addTreeAt(ip);
+        return;
+      }
+
+      if (tool === 'poly_draw') {
+        if (cutPts.length >= 3) {
+          var firstS = i2s(cutPts[0].x, cutPts[0].y);
+          if (Math.hypot(p.x - firstS[0], p.y - firstS[1]) <= 13) {
+            finalizeFreePolygon(); return;
+          }
+        }
+        cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
+        setStatus('Polygon points: ' + cutPts.length + ' (click first yellow point or press Enter to finish).', false);
+        syncUI(); draw(); return;
+      }
+
       if (tool === 'pin') {
         var hp2 = hitPinAt(p);
         if (hp2) {
@@ -1371,6 +1533,8 @@ window.SOS = window.SOS || {};
         view.s = ns;
         view.ox = t.x - drag.imgPt.x * ns;
         view.oy = t.y - drag.imgPt.y * ns;
+      } else if (drag.m === 'futsal_rect') {
+        drag.p2 = ip;
       } else if (drag.m === 'move') {
         if (!drag.pushed) { pushUndo(); drag.pushed = true; }
         drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2);
@@ -1429,6 +1593,13 @@ window.SOS = window.SOS || {};
 
     function up(e) {
       delete ptrs[e.pointerId];
+      if (drag && drag.m === 'futsal_rect') {
+        var dRect = Math.hypot(drag.p2.x - drag.p1.x, drag.p2.y - drag.p1.y);
+        var fp1 = drag.p1, fp2 = drag.p2;
+        drag = null;
+        if (dRect >= 6) createFutsalFromRect(fp1, fp2);
+        draw(); return;
+      }
       if (drag) {
         if ((drag.m === 'move' || drag.m === 'movePin' || drag.m === 'rot' || drag.m === 'resize') && drag.pushed) {
           persistToIDB(); syncUI();
@@ -1450,45 +1621,6 @@ window.SOS = window.SOS || {};
       draw();
     }, { passive: false });
   }
-
-  function onKeyDown(e) {
-    if (!isOpen) return;
-    var tag = e.target && e.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (e.key === ' ') { space = true; e.preventDefault(); return; }
-    if (e.key === 'Escape') {
-      calibDraft = { p1: null, p2: null };
-      measPts = [];
-      cutPts = [];
-      cloneCfg.pickMode = false;
-      setTool('select');
-      syncUI(); draw(); return;
-    }
-    if (tool === 'cutout') {
-      if (e.key === 'Backspace' && cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
-      if (e.key === 'Enter' && cutPts.length >= 3) { e.preventDefault(); extractCutoutFromBase(); return; }
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-      e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); return;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-      e.preventDefault(); doRedo(); return;
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-      if (getSelAsset()) { e.preventDefault(); duplicateSelectedAsset(); } return;
-    }
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (getSelPin() && tool === 'pin') {
-        e.preventDefault();
-        pushUndo();
-        doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; });
-        selPinId = null; persistToIDB(); syncUI(); draw();
-      } else if (getSelAsset()) {
-        e.preventDefault(); deleteSelectedAsset();
-      }
-    }
-  }
-  function onKeyUp(e) { if (e.key === ' ') space = false; }
   // =========================================================================
   // UI BUILD & SYNC (CYBER HUD + DAYLIGHT DESIGN MODE COMPATIBLE)
   // =========================================================================
@@ -1530,7 +1662,7 @@ window.SOS = window.SOS || {};
   function setTool(t) {
     tool = t;
     if (t !== 'measure') measPts = [];
-    if (t !== 'cutout') cutPts = [];
+    if (t !== 'cutout' && t !== 'poly_draw') cutPts = [];
     if (t !== 'clone') cloneCfg.pickMode = false;
     if (!ov) return;
     [].forEach.call(ov.querySelectorAll('[data-sctool]'), function (b) {
@@ -1835,13 +1967,14 @@ window.SOS = window.SOS || {};
 
     var al = ov.querySelector('#scAssetList');
     if (!doc.assets.length) {
-      al.innerHTML = '<div class="mut">No assets yet. Import PNGs or use Cut &amp; Relocate (A➔B).</div>';
+      al.innerHTML = '<div class="mut">No assets yet. Add Futsal, Building, Tent, Tree, Polygon, or PNGs.</div>';
     } else {
       al.innerHTML = doc.assets.slice().reverse().map(function (a) {
+        var tagLbl = a.source === 'cutout' ? 'CUT' : a.source === 'futsal' ? 'PITCH' : a.source === 'bldg' ? 'BLDG' : a.source === 'tent' ? 'TENT' : a.source === 'tree' ? 'TREE' : a.source === 'poly' ? 'POLY' : 'PNG';
         return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '">' +
           '<input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + ' title="Toggle visibility">' +
           '<span>' + esc(a.name) + '</span>' +
-          '<b class="satc-tag' + (a.source === 'cutout' ? ' lk' : ' ok') + '">' + (a.source === 'cutout' ? 'CUT' : 'PNG') + '</b>' +
+          '<b class="satc-tag' + (a.source === 'cutout' ? ' lk' : ' ok') + '">' + tagLbl + '</b>' +
         '</div>';
       }).join('');
       [].forEach.call(al.querySelectorAll('[data-aid]'), function (el) {
@@ -1862,7 +1995,7 @@ window.SOS = window.SOS || {};
     }
 
     var cutBox = ov.querySelector('#scCutBox');
-    cutBox.style.display = tool === 'cutout' ? 'flex' : 'none';
+    cutBox.style.display = (tool === 'cutout' || tool === 'poly_draw') ? 'flex' : 'none';
     ov.querySelector('#scCutPtsV').textContent = String(cutPts.length);
 
     renderAssetInspector();
@@ -1927,6 +2060,11 @@ window.SOS = window.SOS || {};
         '<button data-sctool="erase" title="Soft Eraser on 02_Ground_Cleanup (reveals original base)">Soft Eraser</button>' +
         '<button data-sctool="cutout" class="cy" title="Cut real pixels from 01_Base_Satellite (A) & relocate to (B)">Cut &amp; Relocate A➔B</button>' +
         '<button id="scAddPng" class="on">+ PNG Asset</button>' +
+        '<button data-sctool="futsal_rect" class="amb" title="Drag to place un-grassed futsal pitch + chain-link + red top net">+ Futsal + Red Net</button>' +
+        '<button data-sctool="building_add" class="on" title="Click on map to add realistic top-down building">+ Building</button>' +
+        '<button data-sctool="tent_add" class="on" title="Click on map to add field tent">+ Tent</button>' +
+        '<button data-sctool="tree_add" class="on" title="Click on map to add natural tree canopy">+ Tree</button>' +
+        '<button data-sctool="poly_draw" class="cy" title="Draw custom polygon around area">+ Draw Poly</button>' +
         '<button data-sctool="pin" class="cy" title="Place numbered poster pins (1, 2, 3...)">+ Pin 1..N</button>' +
         '<button id="scTogOver" class="on" title="1-click hide/show 04_Print_Overlays">Overlays: ON</button>' +
         '<button data-sctool="calibrate">Calibrate 2-Pt</button>' +
@@ -1978,10 +2116,10 @@ window.SOS = window.SOS || {};
 
         '<aside class="satc-side r">' +
           '<div id="scCutBox" class="satc-card" style="display:none;border-color:var(--glow-cyan,#00e5ff)">' +
-            '<b>Cut &amp; Relocate (1:1 Native Pixels)</b>' +
-            '<div class="mut">Click around object in 01_Base_Satellite. Vertices: <b id="scCutPtsV">0</b></div>' +
+            '<b>Polygon / Cutout Builder</b>' +
+            '<div class="mut">Click points on map. Vertices: <b id="scCutPtsV">0</b></div>' +
             '<label>Edge Feather (<span id="scCutFeaV">2</span> px)<input type="range" id="scCutFea" min="0" max="6" step="0.5" value="2"></label>' +
-            '<div class="row"><button id="scCutUndo">Undo Pt</button><button id="scCutExec" class="on">Extract 1:1</button><button id="scCutCan" class="dng">Cancel</button></div>' +
+            '<div class="row"><button id="scCutUndo">Undo Pt</button><button id="scCutExec" class="on">Finish / Extract</button><button id="scCutCan" class="dng">Cancel</button></div>' +
           '</div>' +
 
           '<h4>Selected Asset Inspector</h4>' +
@@ -2160,7 +2298,10 @@ window.SOS = window.SOS || {};
       ov.querySelector('#scCutFeaV').textContent = this.value;
     };
     ov.querySelector('#scCutUndo').onclick = function () { if (cutPts.length) { cutPts.pop(); syncUI(); draw(); } };
-    ov.querySelector('#scCutExec').onclick = extractCutoutFromBase;
+    ov.querySelector('#scCutExec').onclick = function () {
+      if (tool === 'poly_draw') finalizeFreePolygon();
+      else extractCutoutFromBase();
+    };
     ov.querySelector('#scCutCan').onclick = function () { cutPts = []; setTool('select'); };
 
     ov.querySelector('#scPickCal').onclick = function () {
@@ -2330,6 +2471,7 @@ window.SOS = window.SOS || {};
   function importState(payload) {
     try {
       if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
+      if (S.SatProcedural && S.SatProcedural.clearProceduralCache) S.SatProcedural.clearProceduralCache();
       if (!payload || typeof payload !== 'object') return false;
       opGen++;
       var snapGen = opGen;
@@ -2360,6 +2502,7 @@ window.SOS = window.SOS || {};
   function clearData(silent) {
     try {
       if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
+      if (S.SatProcedural && S.SatProcedural.clearProceduralCache) S.SatProcedural.clearProceduralCache();
       opGen++;
       doc = blankDoc();
       bins = blankBins();
