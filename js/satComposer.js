@@ -32,12 +32,15 @@ window.SOS = window.SOS || {};
         assets: { visible: true, opacity: 1 },
         overlays: { visible: true, opacity: 1 }
       },
-      sun: { azimuthDeg: 135, lengthFactor: 0.75, opacity: 0.38, blurPx: 4, color: '#0f172a' },
+      sun: { azimuthDeg: 135, lengthFactor: 0.75, opacity: 0.38, blurPx: 4, color: '#2a2118' },
       cleanupImage: { id: null, name: '', width: 0, height: 0 },
-      patches: [],       // { id, sx, sy, dx, dy, r, feather, opacity, rotDeg }
-      cleanupErases: [], // { id, r, feather, opacity, pts:[{x,y}] }
-      assets: [],        // { id, binId, name, source, naturalW, naturalH, x, y, wPx, hPx, lockAspect, rotationDeg, flipX, flipY, opacity, visible, locked, elevationM, shadowEnabled, filters }
-      overlays: { titleAr: '', titleEn: '', showNorth: true, showScale: true, showLegend: true, northDeg: 0, pins: [] }
+      patches: [],
+      cleanupErases: [],
+      assets: [],
+      overlays: {
+        titleAr: '', titleEn: '', showNorth: true, showScale: true, showLegend: true, northDeg: 0,
+        pins: [], paper: 'A2_L', dpi: 200, customWcm: 60, customHcm: 40
+      }
     };
   }
 
@@ -64,8 +67,10 @@ window.SOS = window.SOS || {};
   var ov = null, cv = null, ctx = null, built = false, isOpen = false;
   var W = 1, H = 1, dpr = 1;
   var view = { s: 1, ox: 0, oy: 0 };
-  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'calibrate' | 'measure'
+  var tool = 'select'; // 'select' | 'pan' | 'clone' | 'erase' | 'cutout' | 'pin' | 'calibrate' | 'measure'
   var selAssetId = null;
+  var selPinId = null;
+  var pinCat = 'bldg';
   var ptrs = {}, drag = null, space = false;
   var hovImg = null;
   var calibDraft = { p1: null, p2: null };
@@ -205,10 +210,12 @@ window.SOS = window.SOS || {};
       visible: true,
       locked: false,
       elevationM: 2.5,
-      shadowEnabled: true,
-      filters: { brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }
+      shadowEnabled: true
     }, a || {}, {
-      filters: Object.assign({ brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }, (a && a.filters) || {})
+      filters: Object.assign(
+        { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 },
+        (a && a.filters) || {}
+      )
     });
   }
 
@@ -230,7 +237,9 @@ window.SOS = window.SOS || {};
       patches: Array.isArray(raw.patches) ? raw.patches : [],
       cleanupErases: Array.isArray(raw.cleanupErases) ? raw.cleanupErases : [],
       assets: Array.isArray(raw.assets) ? raw.assets.map(normalizeAsset) : [],
-      overlays: Object.assign(b.overlays, raw.overlays || {})
+      overlays: Object.assign(b.overlays, raw.overlays || {}, {
+        pins: Array.isArray(raw.overlays && raw.overlays.pins) ? raw.overlays.pins : []
+      })
     };
   }
 
@@ -246,6 +255,7 @@ window.SOS = window.SOS || {};
     redoStack.push(JSON.stringify(doc));
     doc = mergeDoc(JSON.parse(undoStack.pop()));
     if (selAssetId && !getSelAsset()) selAssetId = null;
+    if (selPinId && !getSelPin()) selPinId = null;
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
     cleanupDirty = true;
     persistToIDB();
@@ -257,6 +267,7 @@ window.SOS = window.SOS || {};
     undoStack.push(JSON.stringify(doc));
     doc = mergeDoc(JSON.parse(redoStack.pop()));
     if (selAssetId && !getSelAsset()) selAssetId = null;
+    if (selPinId && !getSelPin()) selPinId = null;
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
     cleanupDirty = true;
     persistToIDB();
@@ -324,6 +335,22 @@ window.SOS = window.SOS || {};
   function getSelAsset() {
     for (var i = 0; i < doc.assets.length; i++) {
       if (doc.assets[i].id === selAssetId) return doc.assets[i];
+    }
+    return null;
+  }
+
+  function getSelPin() {
+    var ps = (doc.overlays && doc.overlays.pins) || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === selPinId) return ps[i];
+    return null;
+  }
+
+  function hitPinAt(screenPt) {
+    if (!doc.layers.overlays.visible) return null;
+    var ps = (doc.overlays && doc.overlays.pins) || [];
+    for (var i = ps.length - 1; i >= 0; i--) {
+      var sp = i2s(ps[i].x, ps[i].y);
+      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 15) return ps[i];
     }
     return null;
   }
@@ -502,13 +529,11 @@ window.SOS = window.SOS || {};
       if (bw < 4 || bh < 4) { setStatus('Cutout polygon is too small.', true); return; }
       if (bw > MAX_SAFE_EDGE || bh > MAX_SAFE_EDGE) { setStatus('Cutout exceeds safe canvas edge limit.', true); return; }
 
-      // 1. Copy exact 1:1 natural pixels directly from 01_Base_Satellite
       cutCv = document.createElement('canvas');
       cutCv.width = bw; cutCv.height = bh;
       var cctx = cutCv.getContext('2d');
       cctx.drawImage(imgs.base, x0, y0, bw, bh, 0, 0, bw, bh);
 
-      // 2. Build 1:1 alpha polygon mask (with optional soft edge feather)
       maskCv = document.createElement('canvas');
       maskCv.width = bw; maskCv.height = bh;
       var mctx = maskCv.getContext('2d');
@@ -523,7 +548,6 @@ window.SOS = window.SOS || {};
       mctx.fill();
       mctx.filter = 'none';
 
-      // 3. Apply mask onto 1:1 crop
       cctx.globalCompositeOperation = 'destination-in';
       cctx.drawImage(maskCv, 0, 0);
       cctx.globalCompositeOperation = 'source-over';
@@ -691,7 +715,6 @@ window.SOS = window.SOS || {};
     }
   }
 
-  // Incremental live stamping for 60 FPS clone/erase strokes
   function incrementalStampPatch(p) {
     if (cleanupDirty || !cleanupCacheCv) {
       cleanupDirty = true;
@@ -788,7 +811,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // MAIN RENDERER (LAYERS 01 + 02 + 03 + INTERACTIVE OVERLAYS)
+  // MAIN RENDERER (LAYERS 01 + 02 + 03 + 04 + INTERACTIVE OVERLAYS)
   // =========================================================================
   function draw() {
     if (!isOpen || !ctx) return;
@@ -804,7 +827,7 @@ window.SOS = window.SOS || {};
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('SAT STUDIO READY — IMPORT HIGH-RES SATELLITE IMAGE (01_Base_Satellite)', W / 2, H / 2 - 12);
         ctx.font = '11px ' + MONO;
-        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • PNG Assets • Cut & Relocate (1:1 A➔B)', W / 2, H / 2 + 12);
+        ctx.fillText('Zero-Compression Base • Cleanup & Eraser • PNG Assets • Cut & Relocate • Dual Export', W / 2, H / 2 + 12);
         return;
       }
 
@@ -835,24 +858,49 @@ window.SOS = window.SOS || {};
         }
       }
 
-      // LAYER 03: Movable Assets (PNGs & 1:1 Cutouts)
+      // LAYER 03: Movable Assets + Unified Global Sun Shadow (Multiply) + Satellite Match Filters
       if (doc.layers.assets.visible) {
         var layOp = clamp(doc.layers.assets.opacity, 0, 1);
-        for (var i = 0; i < doc.assets.length; i++) {
-          var a = doc.assets[i];
-          if (!a.visible) continue;
-          var im = imgs.assets[a.binId];
-          if (!im) continue;
-          var scPt = i2s(a.x, a.y);
-          ctx.save();
-          ctx.globalAlpha = layOp * clamp(a.opacity != null ? a.opacity : 1, 0, 1);
-          ctx.translate(scPt[0], scPt[1]);
-          if (a.rotationDeg) ctx.rotate(a.rotationDeg * D);
-          if (a.flipX || a.flipY) ctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
-          ctx.imageSmoothingEnabled = true;
-          ctx.drawImage(im, -a.wPx * view.s / 2, -a.hPx * view.s / 2, a.wPx * view.s, a.hPx * view.s);
-          ctx.restore();
+        if (S.SatBlending && S.SatBlending.renderLayer03) {
+          S.SatBlending.renderLayer03(ctx, {
+            assets: doc.assets,
+            imgs: imgs.assets,
+            sun: doc.sun,
+            pxPerMeter: doc.calibration.pxPerMeter,
+            layerOpacity: layOp,
+            scale: view.s,
+            ox: view.ox,
+            oy: view.oy,
+            viewW: W,
+            viewH: H,
+            forExport: false
+          });
+        } else {
+          for (var i = 0; i < doc.assets.length; i++) {
+            var a = doc.assets[i];
+            if (!a.visible || !imgs.assets[a.binId]) continue;
+            var scPt = i2s(a.x, a.y);
+            ctx.save();
+            ctx.globalAlpha = layOp * clamp(a.opacity != null ? a.opacity : 1, 0, 1);
+            ctx.translate(scPt[0], scPt[1]);
+            if (a.rotationDeg) ctx.rotate(a.rotationDeg * D);
+            if (a.flipX || a.flipY) ctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
+            ctx.drawImage(imgs.assets[a.binId], -a.wPx * view.s / 2, -a.hPx * view.s / 2, a.wPx * view.s, a.hPx * view.s);
+            ctx.restore();
+          }
         }
+      }
+
+      // LAYER 04: Print Overlays Live Preview (Numbered Pins + North Arrow)
+      if (doc.layers.overlays.visible && S.SatExport && S.SatExport.drawLiveOverlays) {
+        S.SatExport.drawLiveOverlays(ctx, {
+          overlays: doc.overlays,
+          i2s: i2s,
+          selPinId: selPinId,
+          layerOpacity: doc.layers.overlays.opacity,
+          viewW: W,
+          viewH: H
+        });
       }
 
       ctx.strokeStyle = isDay ? '#0369a1' : '#1b3b57';
@@ -1167,6 +1215,12 @@ window.SOS = window.SOS || {};
       }
 
       if (tool === 'select') {
+        var hitP = hitPinAt(p);
+        if (hitP) {
+          selPinId = hitP.id;
+          drag = { m: 'movePin', pin: hitP, sx: ip.x, sy: ip.y, x0: hitP.x, y0: hitP.y, pushed: false };
+          syncUI(); draw(); return;
+        }
         var sel = getSelAsset();
         var hk = hitAssetHandle(sel, p);
         if (hk && sel) {
@@ -1252,6 +1306,34 @@ window.SOS = window.SOS || {};
         syncUI(); draw(); return;
       }
 
+      if (tool === 'pin') {
+        var hp2 = hitPinAt(p);
+        if (hp2) {
+          selPinId = hp2.id;
+          drag = { m: 'movePin', pin: hp2, sx: ip.x, sy: ip.y, x0: hp2.x, y0: hp2.y, pushed: false };
+          syncUI(); draw(); return;
+        }
+        pushUndo();
+        doc.layers.overlays.visible = true;
+        var catObj = (S.SatExport && S.SatExport.PIN_CATS[pinCat]) || { color: '#0284c7' };
+        var idxNum = doc.overlays.pins.length + 1;
+        var np = {
+          id: uid('pin'),
+          x: +ip.x.toFixed(2),
+          y: +ip.y.toFixed(2),
+          cat: pinCat,
+          color: catObj.color,
+          labelEn: 'Point ' + idxNum,
+          labelAr: 'موقع ' + idxNum,
+          showTag: false
+        };
+        doc.overlays.pins.push(np);
+        selPinId = np.id;
+        persistToIDB();
+        setStatus('Placed Pin #' + idxNum + '. Edit its AR/EN legend label in the right panel.', false);
+        syncUI(); draw(); return;
+      }
+
       if (tool === 'calibrate') {
         if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) {
           calibDraft = { p1: ip, p2: null };
@@ -1293,6 +1375,10 @@ window.SOS = window.SOS || {};
         if (!drag.pushed) { pushUndo(); drag.pushed = true; }
         drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2);
         drag.a.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2);
+      } else if (drag.m === 'movePin') {
+        if (!drag.pushed) { pushUndo(); drag.pushed = true; }
+        drag.pin.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2);
+        drag.pin.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2);
       } else if (drag.m === 'rot') {
         if (!drag.pushed) { pushUndo(); drag.pushed = true; }
         var deg = Math.atan2(ip.y - drag.a.y, ip.x - drag.a.x) / D + 90;
@@ -1344,7 +1430,7 @@ window.SOS = window.SOS || {};
     function up(e) {
       delete ptrs[e.pointerId];
       if (drag) {
-        if ((drag.m === 'move' || drag.m === 'rot' || drag.m === 'resize') && drag.pushed) {
+        if ((drag.m === 'move' || drag.m === 'movePin' || drag.m === 'rot' || drag.m === 'resize') && drag.pushed) {
           persistToIDB(); syncUI();
         } else if (drag.m === 'clone' || drag.m === 'erase') {
           persistToIDB(); syncUI();
@@ -1392,11 +1478,17 @@ window.SOS = window.SOS || {};
       if (getSelAsset()) { e.preventDefault(); duplicateSelectedAsset(); } return;
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (getSelAsset()) { e.preventDefault(); deleteSelectedAsset(); }
+      if (getSelPin() && tool === 'pin') {
+        e.preventDefault();
+        pushUndo();
+        doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; });
+        selPinId = null; persistToIDB(); syncUI(); draw();
+      } else if (getSelAsset()) {
+        e.preventDefault(); deleteSelectedAsset();
+      }
     }
   }
   function onKeyUp(e) { if (e.key === ' ') space = false; }
-
   // =========================================================================
   // UI BUILD & SYNC (CYBER HUD + DAYLIGHT DESIGN MODE COMPATIBLE)
   // =========================================================================
@@ -1476,12 +1568,18 @@ window.SOS = window.SOS || {};
     var box = ov.querySelector('#scAssetInsp');
     var a = getSelAsset();
     if (!a) {
-      box.innerHTML = '<div class="mut">Select an asset on the canvas or from 03_Movable_Assets list to move, resize, or rotate.</div>';
+      box.innerHTML = '<div class="mut">Select an asset on the canvas or from 03_Movable_Assets list to move, resize, rotate, or blend.</div>';
       return;
     }
     var ppm = doc.calibration.pxPerMeter || 0;
     var wM = ppm > 0 ? (a.wPx / ppm).toFixed(2) : '';
     var hM = ppm > 0 ? (a.hPx / ppm).toFixed(2) : '';
+    var fl = a.filters || { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 };
+    var prHtml = (S.SatBlending && S.SatBlending.PRESETS)
+      ? Object.keys(S.SatBlending.PRESETS).map(function (k) {
+          return '<option value="' + k + '">' + esc(S.SatBlending.PRESETS[k].label) + '</option>';
+        }).join('')
+      : '';
 
     box.innerHTML =
       '<label>Asset Name<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
@@ -1516,6 +1614,20 @@ window.SOS = window.SOS || {};
       (a.source === 'cutout'
         ? '<div class="row"><button id="saCleanA" class="amb">Clean Old Spot (A) ➔ Clone Patch</button></div>'
         : '') +
+      '<div class="satc-card" style="margin-top:4px">' +
+        '<b>Satellite Blend &amp; Shadow Match</b>' +
+        '<select id="saPreset"><option value="">-- Quick Surface Preset --</option>' + prHtml + '</select>' +
+        '<div class="satc-grid2">' +
+          '<label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>Cast Shadow</label>' +
+          '<label>Height (m)<input type="number" id="saElev" step="0.2" min="0" max="40" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label>' +
+        '</div>' +
+        '<label>Brightness (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" step="1" value="' + fl.brightness + '"></label>' +
+        '<label>Contrast (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" step="1" value="' + fl.contrast + '"></label>' +
+        '<label>Saturation (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" step="1" value="' + fl.saturation + '"></label>' +
+        '<label>Warmth / Tint (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" step="1" value="' + (fl.warmth || 0) + '"></label>' +
+        '<label>Sat Softness Blur (<span id="saBlV">' + (fl.blurPx || 0) + '</span> px)<input type="range" id="saBl" min="0" max="2" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
+        '<label>Sensor Grain (<span id="saGrV">' + (fl.grain || 0) + '</span>)<input type="range" id="saGr" min="0" max="40" step="1" value="' + (fl.grain || 0) + '"></label>' +
+      '</div>' +
       '<div class="row"><button id="saDel" class="dng">Delete Asset</button></div>';
 
     box.querySelector('#saName').onchange = function () { pushUndo(); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
@@ -1569,6 +1681,40 @@ window.SOS = window.SOS || {};
     box.querySelector('#saDn').onclick = function () { reorderSelectedAsset(-1); };
     box.querySelector('#saDup').onclick = duplicateSelectedAsset;
     box.querySelector('#saDel').onclick = deleteSelectedAsset;
+
+    box.querySelector('#saPreset').onchange = function () {
+      var pk = this.value, pr = S.SatBlending && S.SatBlending.PRESETS[pk];
+      this.value = '';
+      if (!pr) return;
+      pushUndo();
+      if (pr.elevationM !== null) a.elevationM = pr.elevationM;
+      if (pr.shadowEnabled !== null) a.shadowEnabled = pr.shadowEnabled;
+      a.filters = Object.assign({}, pr.filters);
+      persistToIDB(); syncUI(); draw();
+    };
+    box.querySelector('#saShOn').onchange = function () { pushUndo(); a.shadowEnabled = !!this.checked; persistToIDB(); draw(); };
+    box.querySelector('#saElev').onchange = function () {
+      pushUndo(); a.elevationM = Math.max(0, parseFloat(this.value) || 0);
+      if (a.elevationM === 0) a.shadowEnabled = false;
+      persistToIDB(); syncUI(); draw();
+    };
+    function bindFilterSlider(id, valId, key, isFloat) {
+      var el = box.querySelector(id), pushed = false;
+      el.oninput = function () {
+        if (!pushed) { pushUndo(); pushed = true; }
+        a.filters[key] = isFloat ? parseFloat(this.value) : (+this.value);
+        box.querySelector(valId).textContent = this.value;
+        draw();
+      };
+      el.onchange = function () { pushed = false; persistToIDB(); };
+    }
+    bindFilterSlider('#saBr', '#saBrV', 'brightness', false);
+    bindFilterSlider('#saCt', '#saCtV', 'contrast', false);
+    bindFilterSlider('#saSa', '#saSaV', 'saturation', false);
+    bindFilterSlider('#saWm', '#saWmV', 'warmth', false);
+    bindFilterSlider('#saBl', '#saBlV', 'blurPx', true);
+    bindFilterSlider('#saGr', '#saGrV', 'grain', false);
+
     if (box.querySelector('#saCleanA')) {
       box.querySelector('#saCleanA').onclick = function () {
         cloneCfg.pickMode = !cloneCfg.src;
@@ -1576,6 +1722,82 @@ window.SOS = window.SOS || {};
         setStatus(cloneCfg.src ? 'Paint over old Spot (A) to cover it with clean soil (Alt+Click to pick new source).' : 'Click a clean ground spot to set Clone Source, then paint over Spot (A).', false);
       };
     }
+  }
+
+  function syncSunDirBadge() {
+    if (!ov) return;
+    var az = doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135;
+    var cast = ((az + 180) % 360 + 360) % 360;
+    var cLbl = (S.SatBlending && S.SatBlending.compassLabel) ? S.SatBlending.compassLabel : function () { return ''; };
+    var el = ov.querySelector('#scSunDirTxt');
+    if (el) el.textContent = 'Sun: ' + Math.round(az) + '° ' + cLbl(az) + ' ➔ Shadow casts: ' + Math.round(cast) + '° ' + cLbl(cast);
+  }
+
+  function renderPinsPanel() {
+    var listEl = ov.querySelector('#scPinList');
+    var editEl = ov.querySelector('#scPinEdit');
+    var pins = (doc.overlays && doc.overlays.pins) || [];
+    if (!pins.length) {
+      listEl.innerHTML = '<div class="mut">No pins placed yet. Click "+ Place Pin (1..N)" then click on the map.</div>';
+      editEl.innerHTML = '';
+      return;
+    }
+    listEl.innerHTML = pins.map(function (p, i) {
+      var col = p.color || '#0284c7';
+      return '<div class="satc-ait' + (p.id === selPinId ? ' sel' : '') + '" data-pid="' + esc(p.id) + '">' +
+        '<b style="display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;background:' + esc(col) + ';color:#fff;font-size:10px">' + (i + 1) + '</b>' +
+        '<span>' + esc(p.labelEn || p.labelAr || ('Point ' + (i + 1))) + '</span>' +
+      '</div>';
+    }).join('');
+    [].forEach.call(listEl.querySelectorAll('[data-pid]'), function (el) {
+      el.onclick = function () { selPinId = el.dataset.pid; syncUI(); draw(); };
+    });
+
+    var sp = getSelPin();
+    if (!sp) { editEl.innerHTML = ''; return; }
+    editEl.innerHTML =
+      '<div class="satc-card" style="margin-top:4px">' +
+        '<b>Selected Pin Settings</b>' +
+        '<label>Legend EN<input type="text" id="spEn" value="' + esc(sp.labelEn || '') + '"></label>' +
+        '<label>Legend AR<input type="text" id="spAr" dir="rtl" value="' + esc(sp.labelAr || '') + '"></label>' +
+        '<div class="satc-grid2">' +
+          '<label>Color<input type="color" id="spCol" value="' + esc(sp.color || '#0284c7') + '"></label>' +
+          '<label class="ck" style="align-self:end"><input type="checkbox" id="spTag"' + (sp.showTag ? ' checked' : '') + '>Tag on Map</label>' +
+        '</div>' +
+        '<div class="row"><button id="spDel" class="dng">Delete Pin</button></div>' +
+      '</div>';
+    editEl.querySelector('#spEn').onchange = function () { pushUndo(); sp.labelEn = this.value; persistToIDB(); syncUI(); draw(); };
+    editEl.querySelector('#spAr').onchange = function () { pushUndo(); sp.labelAr = this.value; persistToIDB(); syncUI(); draw(); };
+    editEl.querySelector('#spCol').onchange = function () { pushUndo(); sp.color = this.value; persistToIDB(); syncUI(); draw(); };
+    editEl.querySelector('#spTag').onchange = function () { pushUndo(); sp.showTag = !!this.checked; persistToIDB(); draw(); };
+    editEl.querySelector('#spDel').onclick = function () {
+      pushUndo();
+      doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== sp.id; });
+      selPinId = null; persistToIDB(); syncUI(); draw();
+    };
+  }
+
+  function syncExportEstimator() {
+    if (!ov || !S.SatExport) return;
+    var paper = doc.overlays.paper || 'A2_L';
+    ov.querySelector('#scPaper').value = paper;
+    ov.querySelector('#scDpi').value = String(doc.overlays.dpi || 200);
+    ov.querySelector('#scCustBox').style.display = paper === 'CUSTOM' ? 'grid' : 'none';
+    if (document.activeElement !== ov.querySelector('#scCustW')) ov.querySelector('#scCustW').value = doc.overlays.customWcm || 60;
+    if (document.activeElement !== ov.querySelector('#scCustH')) ov.querySelector('#scCustH').value = doc.overlays.customHcm || 40;
+
+    var bw = imgs.base ? imgs.base.naturalWidth : 0;
+    var bh = imgs.base ? imgs.base.naturalHeight : 0;
+    var est = S.SatExport.estimateExport(doc.overlays, bw, bh);
+    var col = est.level === 'safe' ? 'var(--glow-green,#00ff9d)' : est.level === 'warn' ? 'var(--amber,#f0c44d)' : 'var(--danger,#ff4757)';
+    var el = ov.querySelector('#scRamEst');
+    el.style.borderColor = col;
+    el.innerHTML =
+      '<div>Output: <b>' + est.pw + ' × ' + est.ph + ' px</b> (' + est.mp.toFixed(1) + ' MP)</div>' +
+      '<div>Est. Peak RAM: <b>~' + Math.round(est.estPeakMB) + ' MB</b> | Max Edge: ' + est.maxEdge + ' / ' + MAX_SAFE_EDGE + ' px</div>' +
+      (est.effDpi > 0 ? ('<div>Base Source Effective DPI: <b style="color:' + (est.effDpi < 120 ? 'var(--amber,#f0c44d)' : 'var(--glow-green,#00ff9d)') + '">' + est.effDpi + ' DPI</b>' + (est.effDpi < 120 ? ' (load higher-res base for sharp wall print)' : '') + '</div>') : '') +
+      '<div style="color:' + col + '">' + esc(est.note) + '</div>';
+    ov.querySelector('#scExpPoster').disabled = (est.level === 'block');
   }
 
   function syncUI() {
@@ -1645,6 +1867,17 @@ window.SOS = window.SOS || {};
 
     renderAssetInspector();
 
+    ov.querySelector('#scSunAz').value = Math.round(doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135);
+    ov.querySelector('#scSunAzV').textContent = Math.round(doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135);
+    ov.querySelector('#scSunLen').value = doc.sun.lengthFactor != null ? doc.sun.lengthFactor : 0.75;
+    ov.querySelector('#scSunLenV').textContent = Number(doc.sun.lengthFactor != null ? doc.sun.lengthFactor : 0.75).toFixed(2);
+    ov.querySelector('#scSunOp').value = Math.round((doc.sun.opacity != null ? doc.sun.opacity : 0.38) * 100);
+    ov.querySelector('#scSunOpV').textContent = Math.round((doc.sun.opacity != null ? doc.sun.opacity : 0.38) * 100);
+    ov.querySelector('#scSunBl').value = doc.sun.blurPx != null ? doc.sun.blurPx : 4;
+    ov.querySelector('#scSunBlV').textContent = doc.sun.blurPx != null ? doc.sun.blurPx : 4;
+    ov.querySelector('#scSunCol').value = doc.sun.color || '#2a2118';
+    syncSunDirBadge();
+
     var p1 = calibDraft.p1 || doc.calibration.p1;
     var p2 = calibDraft.p2 || doc.calibration.p2;
     var pxD = (p1 && p2) ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
@@ -1655,6 +1888,19 @@ window.SOS = window.SOS || {};
     var mInp = ov.querySelector('#scCalM');
     if (document.activeElement !== mInp) mInp.value = doc.calibration.knownMeters || 10;
     ov.querySelector('#scCadHint').textContent = getCadScaleHint();
+
+    var ovOn = !!doc.layers.overlays.visible;
+    var tb = ov.querySelector('#scTogOver');
+    tb.textContent = 'Overlays: ' + (ovOn ? 'ON' : 'OFF');
+    tb.classList.toggle('on', ovOn);
+    if (document.activeElement !== ov.querySelector('#scTitEn')) ov.querySelector('#scTitEn').value = doc.overlays.titleEn || '';
+    if (document.activeElement !== ov.querySelector('#scTitAr')) ov.querySelector('#scTitAr').value = doc.overlays.titleAr || '';
+    ov.querySelector('#scOvNorth').checked = doc.overlays.showNorth !== false;
+    ov.querySelector('#scOvScale').checked = doc.overlays.showScale !== false;
+    ov.querySelector('#scOvLeg').checked = doc.overlays.showLegend !== false;
+    if (document.activeElement !== ov.querySelector('#scNorthDeg')) ov.querySelector('#scNorthDeg').value = doc.overlays.northDeg || 0;
+    renderPinsPanel();
+    syncExportEstimator();
   }
 
   function resize() {
@@ -1673,7 +1919,7 @@ window.SOS = window.SOS || {};
     ov.dataset.ajDone = '1';
     ov.innerHTML =
       '<div class="satc-top">' +
-        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHASE 2)</b>' +
+        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (COMPLETE)</b>' +
         '<button id="scImportBase" class="on">Import Base</button>' +
         '<button data-sctool="select" class="on">Select / Move</button>' +
         '<button data-sctool="pan">Pan</button>' +
@@ -1681,6 +1927,8 @@ window.SOS = window.SOS || {};
         '<button data-sctool="erase" title="Soft Eraser on 02_Ground_Cleanup (reveals original base)">Soft Eraser</button>' +
         '<button data-sctool="cutout" class="cy" title="Cut real pixels from 01_Base_Satellite (A) & relocate to (B)">Cut &amp; Relocate A➔B</button>' +
         '<button id="scAddPng" class="on">+ PNG Asset</button>' +
+        '<button data-sctool="pin" class="cy" title="Place numbered poster pins (1, 2, 3...)">+ Pin 1..N</button>' +
+        '<button id="scTogOver" class="on" title="1-click hide/show 04_Print_Overlays">Overlays: ON</button>' +
         '<button data-sctool="calibrate">Calibrate 2-Pt</button>' +
         '<button data-sctool="measure">Measure</button>' +
         '<button id="scFit">Fit</button>' +
@@ -1700,7 +1948,7 @@ window.SOS = window.SOS || {};
           '<div class="satc-layer"><label><input type="checkbox" id="scLayBase" checked>01_Base_Satellite</label><span class="satc-tag lk">LOCKED</span></div>' +
           '<div class="satc-layer"><label><input type="checkbox" id="scLayClean" checked>02_Ground_Cleanup</label><span class="satc-tag ok">ACTIVE</span></div>' +
           '<div class="satc-layer"><label><input type="checkbox" id="scLayAssets" checked>03_Movable_Assets</label><span class="satc-tag ok">ACTIVE</span></div>' +
-          '<div class="satc-layer"><label><input type="checkbox" id="scLayOver" checked>04_Print_Overlays</label><span class="satc-tag">Phase 4</span></div>' +
+          '<div class="satc-layer"><label><input type="checkbox" id="scLayOver" checked>04_Print_Overlays</label><span class="satc-tag ok">ACTIVE</span></div>' +
 
           '<h4>01_Base_Satellite Info</h4>' +
           '<div id="scBaseInfo" class="satc-card"></div>' +
@@ -1739,6 +1987,20 @@ window.SOS = window.SOS || {};
           '<h4>Selected Asset Inspector</h4>' +
           '<div id="scAssetInsp" class="satc-card"></div>' +
 
+          '<h4>Global Sun Shadow (Multiply)</h4>' +
+          '<div class="satc-card">' +
+            '<div id="scSunDirTxt" class="mut"></div>' +
+            '<label>Sun Azimuth (<span id="scSunAzV">135</span>&deg;)<input type="range" id="scSunAz" min="0" max="359" step="1" value="135"></label>' +
+            '<label>Shadow Length (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label>' +
+            '<label>Shadow Opacity (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" step="1" value="38"></label>' +
+            '<label>Shadow Softness (<span id="scSunBlV">4</span> px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label>' +
+            '<div class="row">' +
+              '<input type="color" id="scSunCol" value="#2a2118" title="Global Shadow Color" style="max-width:44px;padding:1px">' +
+              '<button id="scShWarm" class="amb">Warm Soil</button>' +
+              '<button id="scShCool" class="cy">Cool Neutral</button>' +
+            '</div>' +
+          '</div>' +
+
           '<h4>Site Metric Calibration (px/m)</h4>' +
           '<div class="satc-card">' +
             '<div>Status: <b id="scCalStat">Uncalibrated</b></div>' +
@@ -1748,6 +2010,44 @@ window.SOS = window.SOS || {};
             '<div class="row"><button id="scResetCal" class="dng">Clear Scale</button></div>' +
           '</div>' +
           '<p id="scCadHint" class="mut"></p>' +
+
+          '<h4>04_Print_Overlays (Poster &amp; Legend)</h4>' +
+          '<div class="satc-card">' +
+            '<label>Poster Title (EN)<input type="text" id="scTitEn" placeholder="e.g. Site Updated Map"></label>' +
+            '<label>Poster Title (AR)<input type="text" id="scTitAr" dir="rtl" placeholder="مثال: خريطة الموقع المحدّثة"></label>' +
+            '<div class="satc-grid2">' +
+              '<label class="ck"><input type="checkbox" id="scOvNorth" checked>North Arrow</label>' +
+              '<label class="ck"><input type="checkbox" id="scOvScale" checked>Scale Bar</label>' +
+            '</div>' +
+            '<label class="ck"><input type="checkbox" id="scOvLeg" checked>Show Bilingual Legend</label>' +
+            '<div class="satc-grid2">' +
+              '<label>North (&deg;)<input type="number" id="scNorthDeg" step="1" value="0"></label>' +
+              '<button id="scSyncNorth" class="cy" style="align-self:end">Sync CAD North</button>' +
+            '</div>' +
+            '<label>New Pin Category<select id="scPinCat"></select></label>' +
+            '<div class="row"><button id="scAddPinBtn" class="cy">+ Place Pin (1..N)</button><button id="scClrPins" class="dng">Clear Pins</button></div>' +
+            '<div id="scPinList" class="satc-alist"></div>' +
+            '<div id="scPinEdit"></div>' +
+          '</div>' +
+
+          '<h4>Dual High-Res Export (Safe RAM Guard)</h4>' +
+          '<div class="satc-card">' +
+            '<div class="row"><button id="scExpClean" class="on">1. Export Master_Clean_2D.png</button></div>' +
+            '<div class="mut">Merges Layers 1+2+3 ONLY at exact original resolution (3D Base Texture).</div>' +
+            '<hr style="border:0;border-top:1px solid var(--border-petrol,#1b3b57);margin:3px 0">' +
+            '<label>Poster Size (Contain Aspect)<select id="scPaper"></select></label>' +
+            '<div id="scCustBox" class="satc-grid2" style="display:none">' +
+              '<label>Width (cm)<input type="number" id="scCustW" min="10" max="200" step="1" value="60"></label>' +
+              '<label>Height (cm)<input type="number" id="scCustH" min="10" max="200" step="1" value="40"></label>' +
+            '</div>' +
+            '<label>Print Resolution (DPI)<select id="scDpi">' +
+              '<option value="150">150 DPI (Fast / Large Boards)</option>' +
+              '<option value="200" selected>200 DPI (Recommended for A1/A2)</option>' +
+              '<option value="300">300 DPI (Ultra Print — A3/A2)</option>' +
+            '</select></label>' +
+            '<div id="scRamEst" class="satc-card" style="font-size:10px;line-height:1.45"></div>' +
+            '<div class="row"><button id="scExpPoster" class="amb">2. Export Print Poster PNG</button></div>' +
+          '</div>' +
         '</aside>' +
       '</div>' +
       '<div class="satc-foot">' +
@@ -1794,7 +2094,13 @@ window.SOS = window.SOS || {};
     };
 
     function bindLay(id, key) {
-      ov.querySelector(id).onchange = function () { pushUndo(); doc.layers[key].visible = !!this.checked; persistToIDB(); draw(); };
+      ov.querySelector(id).onchange = function () {
+        pushUndo();
+        doc.layers[key].visible = !!this.checked;
+        persistToIDB();
+        if (key === 'overlays') syncUI();
+        draw();
+      };
     }
     bindLay('#scLayBase', 'base');
     bindLay('#scLayClean', 'cleanup');
@@ -1865,6 +2171,101 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scApplyCal').onclick = function () { applyCalibration(ov.querySelector('#scCalM').value); };
     ov.querySelector('#scResetCal').onclick = clearCalibration;
 
+    function bindSunSlider(id, valId, key, scaleDiv, isFloat) {
+      var el = ov.querySelector(id), pushed = false;
+      el.oninput = function () {
+        if (!pushed) { pushUndo(); pushed = true; }
+        var raw = isFloat ? parseFloat(this.value) : (+this.value);
+        doc.sun[key] = scaleDiv ? (raw / scaleDiv) : raw;
+        ov.querySelector(valId).textContent = this.value;
+        syncSunDirBadge();
+        draw();
+      };
+      el.onchange = function () { pushed = false; persistToIDB(); };
+    }
+    bindSunSlider('#scSunAz', '#scSunAzV', 'azimuthDeg', 0, false);
+    bindSunSlider('#scSunLen', '#scSunLenV', 'lengthFactor', 0, true);
+    bindSunSlider('#scSunOp', '#scSunOpV', 'opacity', 100, false);
+    bindSunSlider('#scSunBl', '#scSunBlV', 'blurPx', 0, true);
+    ov.querySelector('#scSunCol').onchange = function () { pushUndo(); doc.sun.color = this.value; persistToIDB(); draw(); };
+    ov.querySelector('#scShWarm').onclick = function () {
+      pushUndo(); doc.sun.color = (S.SatBlending && S.SatBlending.SHADOW_COLORS.desert) || '#2a2118';
+      persistToIDB(); syncUI(); draw();
+    };
+    ov.querySelector('#scShCool').onclick = function () {
+      pushUndo(); doc.sun.color = (S.SatBlending && S.SatBlending.SHADOW_COLORS.neutral) || '#0f172a';
+      persistToIDB(); syncUI(); draw();
+    };
+
+    // Layer 04 Print Overlays & Dual High-Res Export Controls
+    if (S.SatExport) {
+      ov.querySelector('#scPinCat').innerHTML = Object.keys(S.SatExport.PIN_CATS).map(function (k) {
+        return '<option value="' + k + '">' + esc(S.SatExport.PIN_CATS[k].label + ' / ' + S.SatExport.PIN_CATS[k].ar) + '</option>';
+      }).join('');
+      ov.querySelector('#scPaper').innerHTML = Object.keys(S.SatExport.PAPERS).map(function (k) {
+        return '<option value="' + k + '">' + esc(S.SatExport.PAPERS[k].label) + '</option>';
+      }).join('');
+    }
+    ov.querySelector('#scTogOver').onclick = function () {
+      pushUndo();
+      doc.layers.overlays.visible = !doc.layers.overlays.visible;
+      persistToIDB(); syncUI(); draw();
+    };
+    ov.querySelector('#scTitEn').onchange = function () { pushUndo(); doc.overlays.titleEn = this.value; persistToIDB(); };
+    ov.querySelector('#scTitAr').onchange = function () { pushUndo(); doc.overlays.titleAr = this.value; persistToIDB(); };
+    ov.querySelector('#scOvNorth').onchange = function () { pushUndo(); doc.overlays.showNorth = !!this.checked; persistToIDB(); draw(); };
+    ov.querySelector('#scOvScale').onchange = function () { pushUndo(); doc.overlays.showScale = !!this.checked; persistToIDB(); draw(); };
+    ov.querySelector('#scOvLeg').onchange = function () { pushUndo(); doc.overlays.showLegend = !!this.checked; persistToIDB(); };
+    ov.querySelector('#scNorthDeg').onchange = function () {
+      pushUndo(); doc.overlays.northDeg = (((parseFloat(this.value) || 0) % 360) + 360) % 360;
+      persistToIDB(); syncUI(); draw();
+    };
+    ov.querySelector('#scSyncNorth').onclick = function () {
+      var offN = (St && St.project && St.project.meta && St.project.meta.trueNorthOffsetDeg) || 0;
+      pushUndo(); doc.overlays.northDeg = +Number(offN).toFixed(1);
+      persistToIDB(); syncUI(); draw();
+      setStatus('Synced North Arrow to AJ-GeoCAD trueNorthOffsetDeg (' + doc.overlays.northDeg + '°).', false);
+    };
+    ov.querySelector('#scPinCat').onchange = function () { pinCat = this.value; };
+    ov.querySelector('#scAddPinBtn').onclick = function () {
+      if (!imgs.base) { setStatus('Import 01_Base_Satellite first.', true); return; }
+      setTool('pin');
+      setStatus('Click on the satellite map to place numbered pins (1, 2, 3...). Drag existing pins to reposition.', false);
+    };
+    ov.querySelector('#scClrPins').onclick = function () {
+      if (!doc.overlays.pins.length) return;
+      pushUndo(); doc.overlays.pins = []; selPinId = null; persistToIDB(); syncUI(); draw();
+    };
+
+    function onPosterCfgChange() {
+      doc.overlays.paper = ov.querySelector('#scPaper').value;
+      doc.overlays.dpi = +ov.querySelector('#scDpi').value;
+      doc.overlays.customWcm = parseFloat(ov.querySelector('#scCustW').value) || 60;
+      doc.overlays.customHcm = parseFloat(ov.querySelector('#scCustH').value) || 40;
+      persistToIDB();
+      syncExportEstimator();
+    }
+    ov.querySelector('#scPaper').onchange = onPosterCfgChange;
+    ov.querySelector('#scDpi').onchange = onPosterCfgChange;
+    ov.querySelector('#scCustW').onchange = onPosterCfgChange;
+    ov.querySelector('#scCustH').onchange = onPosterCfgChange;
+
+    function buildExportPayload() {
+      return {
+        doc: doc,
+        baseImg: imgs.base,
+        assetImgs: imgs.assets,
+        siteName: (St && St.project && St.project.meta && St.project.meta.name) || 'Site',
+        renderCleanupTo: renderCleanupLayerTo
+      };
+    }
+    ov.querySelector('#scExpClean').onclick = function () {
+      if (S.SatExport) S.SatExport.exportMasterClean2D(buildExportPayload(), setStatus);
+    };
+    ov.querySelector('#scExpPoster').onclick = function () {
+      if (S.SatExport) S.SatExport.exportPosterPNG(buildExportPayload(), doc.overlays, setStatus);
+    };
+
     if (window.ResizeObserver) new ResizeObserver(resize).observe(cv.parentNode);
     else window.addEventListener('resize', resize);
     built = true;
@@ -1897,7 +2298,11 @@ window.SOS = window.SOS || {};
   }
 
   function hasData() {
-    return !!(bins.base || hasActiveCleanupImg() || doc.calibration.pxPerMeter > 0 || doc.patches.length || doc.cleanupErases.length || doc.assets.length);
+    return !!(
+      bins.base || hasActiveCleanupImg() || doc.calibration.pxPerMeter > 0 ||
+      doc.patches.length || doc.cleanupErases.length || doc.assets.length ||
+      (doc.overlays && doc.overlays.pins && doc.overlays.pins.length)
+    );
   }
 
   function exportState(opts) {
@@ -1924,11 +2329,12 @@ window.SOS = window.SOS || {};
 
   function importState(payload) {
     try {
+      if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       if (!payload || typeof payload !== 'object') return false;
       opGen++;
       var snapGen = opGen;
       undoStack = []; redoStack = [];
-      selAssetId = null; cutPts = [];
+      selAssetId = null; selPinId = null; cutPts = [];
       doc = mergeDoc(payload.doc || payload);
       var inBins = payload.bins || {};
       var sameBase = !inBins.base && bins.base && doc.base.id && payload.doc && payload.doc.base && payload.doc.base.id === doc.base.id;
@@ -1953,6 +2359,7 @@ window.SOS = window.SOS || {};
 
   function clearData(silent) {
     try {
+      if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       opGen++;
       doc = blankDoc();
       bins = blankBins();
@@ -1960,7 +2367,7 @@ window.SOS = window.SOS || {};
       if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
       cleanupDirty = true;
       undoStack = []; redoStack = [];
-      selAssetId = null; cutPts = []; measPts = [];
+      selAssetId = null; selPinId = null; cutPts = []; measPts = [];
       calibDraft = { p1: null, p2: null };
       cloneCfg.src = null; cloneCfg.pickMode = false;
       wipeIDB();
