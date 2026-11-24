@@ -49,9 +49,7 @@ window.SOS = window.SOS || {};
     };
   }
 
-  // 1. Un-grassed Futsal Pitch + Chain-Link Fence + Red Top Netting
- // 1. Un-grassed Futsal Pitch + Lower Chain-Link + Upper Red Netting + Posts
- // 1. Naturalistic Satellite-Blended Un-grassed Futsal Pitch + Chain-Link + Light Red Top Net
+  // 1. Naturalistic Satellite-Blended Un-grassed Futsal Pitch + Chain-Link + Light Red Top Net
   function renderFutsalAssetCanvas(opts) {
     var wPx = Math.max(32, Math.round(opts.wPx || 240));
     var hPx = Math.max(24, Math.round(opts.hPx || 144));
@@ -64,7 +62,6 @@ window.SOS = window.SOS || {};
     var g = c.getContext('2d');
     var rand = seededRandom(90210);
 
-    // Warm sandy ground tones blended for aerial realism
     var soilCol = opts.soilColor || '#bfa06e';
     var lineCol = opts.lineColor || 'rgba(245,242,235,0.24)';
     var postCol = opts.postColor || 'rgba(71,85,105,0.75)';
@@ -75,7 +72,6 @@ window.SOS = window.SOS || {};
     var lowerFenceBand = Math.max(4, Math.round(Math.min(cw, ch) * 0.052));
     var totalWallBand = upperNetBand + lowerFenceBand;
 
-    // 1. Base compacted earth with organic patches & wear variation
     g.fillStyle = soilCol;
     g.fillRect(0, 0, cw, ch);
 
@@ -105,7 +101,6 @@ window.SOS = window.SOS || {};
       g.fillRect(rx, ry, 1.5, 1.5);
     }
 
-    // 2. Faded/weathered court lines (subtle like real aerial photography)
     var padX = totalWallBand + Math.max(4, cw * 0.035);
     var padY = totalWallBand + Math.max(4, ch * 0.045);
     var fw = Math.max(12, cw - padX * 2);
@@ -128,7 +123,6 @@ window.SOS = window.SOS || {};
     g.strokeRect(padX + fw - penW, midY - penH / 2, penW, penH);
     g.restore();
 
-    // 3. Perimeter upper red net + lower chain-link + posts
     function drawPerimeterSide(x0, y0, x1, y1, nx, ny) {
       var segLen = Math.hypot(x1 - x0, y1 - y0);
       if (segLen < 2) return;
@@ -198,81 +192,6 @@ window.SOS = window.SOS || {};
     return c.toDataURL('image/png');
   }
 
-      // Upper red netting band (outer edge)
-      g.fillStyle = upperRedNetCol;
-      g.beginPath();
-      g.moveTo(x0, y0);
-      g.lineTo(x1, y1);
-      g.lineTo(midEdgeX + dx, midEdgeY + dy);
-      g.lineTo(midEdgeX, midEdgeY);
-      g.closePath();
-      g.fill();
-
-      // Lower chain-link mesh band (inner to upper net)
-      g.fillStyle = 'rgba(148,163,184,0.14)';
-      g.beginPath();
-      g.moveTo(midEdgeX, midEdgeY);
-      g.lineTo(midEdgeX + dx, midEdgeY + dy);
-      g.lineTo(innerEdgeX + dx, innerEdgeY + dy);
-      g.lineTo(innerEdgeX, innerEdgeY);
-      g.closePath();
-      g.fill();
-
-      // Fine red mesh lines on upper band
-      var redSteps = Math.max(6, Math.round(segLen / Math.max(3, upperNetBand * 0.65)));
-      g.strokeStyle = upperRedNetCol;
-      g.lineWidth = Math.max(0.7, lw * 0.6);
-      for (var m = 0; m < redSteps; m++) {
-        var u0 = m / redSteps, u1 = (m + 1) / redSteps;
-        var ux0 = x0 + dx * u0, uy0 = y0 + dy * u0;
-        var ux1 = x0 + dx * u1, uy1 = y0 + dy * u1;
-        g.beginPath();
-        g.moveTo(ux0, uy0); g.lineTo(ux1 + nx * upperNetBand, uy1 + ny * upperNetBand);
-        g.moveTo(ux1, uy1); g.lineTo(ux0 + nx * upperNetBand, uy0 + ny * upperNetBand);
-        g.stroke();
-      }
-
-      // Chain-link diamond weave on lower band
-      var meshSteps = Math.max(5, Math.round(segLen / Math.max(4, lowerFenceBand * 0.5)));
-      g.strokeStyle = lowerMeshCol;
-      g.lineWidth = Math.max(0.7, lw * 0.65);
-      for (var k = 0; k < meshSteps; k++) {
-        var t0 = k / meshSteps, t1 = (k + 1) / meshSteps;
-        var ax = midEdgeX + dx * t0, ay = midEdgeY + dy * t0;
-        var bx = midEdgeX + dx * t1, by = midEdgeY + dy * t1;
-        g.beginPath();
-        g.moveTo(ax, ay); g.lineTo(bx + nx * lowerFenceBand, by + ny * lowerFenceBand);
-        g.moveTo(bx, by); g.lineTo(ax + nx * lowerFenceBand, ay + ny * lowerFenceBand);
-        g.stroke();
-      }
-
-      // Top & bottom rail lines
-      g.strokeStyle = postCol;
-      g.lineWidth = Math.max(1, lw * 0.85);
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      g.beginPath(); g.moveTo(innerEdgeX, innerEdgeY); g.lineTo(innerEdgeX + dx, innerEdgeY + dy); g.stroke();
-
-      // Vertical support posts along side
-      var postCount = Math.max(2, Math.round(segLen / Math.max(18, Math.min(cw, ch) * 0.24)));
-      var postR = Math.max(1.4, lw * 1.15);
-      for (var p = 0; p <= postCount; p++) {
-        var pt = p / postCount;
-        var px = x0 + dx * pt, py = y0 + dy * pt;
-        g.fillStyle = postCol;
-        g.beginPath();
-        g.arc(px, py, postR, 0, Math.PI * 2);
-        g.fill();
-      }
-    }
-
-    drawPerimeterSide(0, 0, cw, 0, 0, 1);
-    drawPerimeterSide(cw, 0, cw, ch, -1, 0);
-    drawPerimeterSide(cw, ch, 0, ch, 0, -1);
-    drawPerimeterSide(0, ch, 0, 0, 1, 0);
-
-    return c.toDataURL('image/png');
-  }
-
   // 2. Top-Down Building / Prefab Structure with Roof Ridge, Parapet & AC/Solar Detail
   function renderBuildingAssetCanvas(opts) {
     var wPx = Math.max(24, Math.round(opts.wPx || 140));
@@ -294,12 +213,10 @@ window.SOS = window.SOS || {};
     g.fillStyle = roofCol;
     g.fillRect(pad, pad, bw, bh);
 
-    // Subtle roof bevel / parapet border
     g.strokeStyle = trimCol;
     g.lineWidth = Math.max(1.2, Math.min(cw, ch) * 0.025);
     g.strokeRect(pad, pad, bw, bh);
 
-    // Roof central ridge / rib lines for realistic aerial look
     g.strokeStyle = ridgeCol;
     g.lineWidth = Math.max(0.8, Math.min(cw, ch) * 0.012);
     if (bw >= bh) {
@@ -324,7 +241,6 @@ window.SOS = window.SOS || {};
       }
     }
 
-    // Small rooftop mechanical unit
     var uw = Math.max(4, Math.min(bw, bh) * 0.16);
     g.fillStyle = 'rgba(148,163,184,0.65)';
     g.strokeStyle = 'rgba(51,65,85,0.6)';
@@ -335,7 +251,7 @@ window.SOS = window.SOS || {};
     return c.toDataURL('image/png');
   }
 
-  // 3. Top-Down Field Tent with Seams, Guy-Lines & Ridge
+  // 3. Top-Down Field Tent with Seams & Ridge
   function renderTentAssetCanvas(opts) {
     var wPx = Math.max(24, Math.round(opts.wPx || 96));
     var hPx = Math.max(24, Math.round(opts.hPx || 96));
@@ -392,7 +308,6 @@ window.SOS = window.SOS || {};
     var hiCol = opts.highlightColor || '#5b8449';
     var darkCol = opts.shadeColor || '#284222';
 
-    // Outer organic foliage lobes
     var lobes = 11;
     g.fillStyle = darkCol;
     g.beginPath();
@@ -406,7 +321,6 @@ window.SOS = window.SOS || {};
     g.closePath();
     g.fill();
 
-    // Main mid-tone canopy
     g.fillStyle = baseCol;
     g.beginPath();
     for (var j = 0; j <= lobes; j++) {
@@ -419,7 +333,6 @@ window.SOS = window.SOS || {};
     g.closePath();
     g.fill();
 
-    // Sunlit crown clusters & micro leaf tufts
     var tufts = Math.min(48, Math.max(12, Math.floor(csz / 3)));
     for (var k = 0; k < tufts; k++) {
       var dist = rand() * baseR * 0.78;
