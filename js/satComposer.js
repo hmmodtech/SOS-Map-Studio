@@ -32,7 +32,7 @@ window.SOS = window.SOS || {};
         assets: { visible: true, opacity: 1 },
         overlays: { visible: true, opacity: 1 }
       },
-      sun: { azimuthDeg: 135, lengthFactor: 0.75, opacity: 0.38, blurPx: 4, color: '#2a2118' },
+      sun: { azimuthDeg: 135, lengthFactor: 0.75, opacity: 0.38, blurPx: 4, color: '#0f172a' },
       cleanupImage: { id: null, name: '', width: 0, height: 0 },
       patches: [],       // { id, sx, sy, dx, dy, r, feather, opacity, rotDeg }
       cleanupErases: [], // { id, r, feather, opacity, pts:[{x,y}] }
@@ -208,9 +208,7 @@ window.SOS = window.SOS || {};
       shadowEnabled: true,
       filters: { brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }
     }, a || {}, {
-      filters: { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 }
-    }, a || {}, {
-      filters: Object.assign({ brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 }, (a && a.filters) || {})
+      filters: Object.assign({ brightness: 100, contrast: 100, saturation: 100, blurPx: 0, grain: 0 }, (a && a.filters) || {})
     });
   }
 
@@ -838,36 +836,22 @@ window.SOS = window.SOS || {};
       }
 
       // LAYER 03: Movable Assets (PNGs & 1:1 Cutouts)
-      // LAYER 03: Movable Assets + Unified Global Sun Shadow (Multiply) + Satellite Match Filters
       if (doc.layers.assets.visible) {
         var layOp = clamp(doc.layers.assets.opacity, 0, 1);
-        if (S.SatBlending && S.SatBlending.renderLayer03) {
-          S.SatBlending.renderLayer03(ctx, {
-            assets: doc.assets,
-            imgs: imgs.assets,
-            sun: doc.sun,
-            pxPerMeter: doc.calibration.pxPerMeter,
-            layerOpacity: layOp,
-            scale: view.s,
-            ox: view.ox,
-            oy: view.oy,
-            viewW: W,
-            viewH: H,
-            forExport: false
-          });
-        } else {
-          for (var i = 0; i < doc.assets.length; i++) {
-            var a = doc.assets[i];
-            if (!a.visible || !imgs.assets[a.binId]) continue;
-            var scPt = i2s(a.x, a.y);
-            ctx.save();
-            ctx.globalAlpha = layOp * clamp(a.opacity != null ? a.opacity : 1, 0, 1);
-            ctx.translate(scPt[0], scPt[1]);
-            if (a.rotationDeg) ctx.rotate(a.rotationDeg * D);
-            if (a.flipX || a.flipY) ctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
-            ctx.drawImage(imgs.assets[a.binId], -a.wPx * view.s / 2, -a.hPx * view.s / 2, a.wPx * view.s, a.hPx * view.s);
-            ctx.restore();
-          }
+        for (var i = 0; i < doc.assets.length; i++) {
+          var a = doc.assets[i];
+          if (!a.visible) continue;
+          var im = imgs.assets[a.binId];
+          if (!im) continue;
+          var scPt = i2s(a.x, a.y);
+          ctx.save();
+          ctx.globalAlpha = layOp * clamp(a.opacity != null ? a.opacity : 1, 0, 1);
+          ctx.translate(scPt[0], scPt[1]);
+          if (a.rotationDeg) ctx.rotate(a.rotationDeg * D);
+          if (a.flipX || a.flipY) ctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(im, -a.wPx * view.s / 2, -a.hPx * view.s / 2, a.wPx * view.s, a.hPx * view.s);
+          ctx.restore();
         }
       }
 
@@ -1498,12 +1482,7 @@ window.SOS = window.SOS || {};
     var ppm = doc.calibration.pxPerMeter || 0;
     var wM = ppm > 0 ? (a.wPx / ppm).toFixed(2) : '';
     var hM = ppm > 0 ? (a.hPx / ppm).toFixed(2) : '';
-    var fl = a.filters || { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 };
-    var prHtml = (S.SatBlending && S.SatBlending.PRESETS)
-      ? Object.keys(S.SatBlending.PRESETS).map(function (k) {
-          return '<option value="' + k + '">' + esc(S.SatBlending.PRESETS[k].label) + '</option>';
-        }).join('')
-      : '';
+
     box.innerHTML =
       '<label>Asset Name<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
       (ppm > 0
@@ -1537,20 +1516,6 @@ window.SOS = window.SOS || {};
       (a.source === 'cutout'
         ? '<div class="row"><button id="saCleanA" class="amb">Clean Old Spot (A) ➔ Clone Patch</button></div>'
         : '') +
-      '<div class="satc-card" style="margin-top:4px">' +
-        '<b>Satellite Blend &amp; Shadow Match</b>' +
-        '<select id="saPreset"><option value="">-- Quick Surface Preset --</option>' + prHtml + '</select>' +
-        '<div class="satc-grid2">' +
-          '<label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>Cast Shadow</label>' +
-          '<label>Height (m)<input type="number" id="saElev" step="0.2" min="0" max="40" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label>' +
-        '</div>' +
-        '<label>Brightness (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" step="1" value="' + fl.brightness + '"></label>' +
-        '<label>Contrast (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" step="1" value="' + fl.contrast + '"></label>' +
-        '<label>Saturation (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" step="1" value="' + fl.saturation + '"></label>' +
-        '<label>Warmth / Tint (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" step="1" value="' + (fl.warmth || 0) + '"></label>' +
-        '<label>Sat Softness Blur (<span id="saBlV">' + (fl.blurPx || 0) + '</span> px)<input type="range" id="saBl" min="0" max="2" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
-        '<label>Sensor Grain (<span id="saGrV">' + (fl.grain || 0) + '</span>)<input type="range" id="saGr" min="0" max="40" step="1" value="' + (fl.grain || 0) + '"></label>' +
-      '</div>' +
       '<div class="row"><button id="saDel" class="dng">Delete Asset</button></div>';
 
     box.querySelector('#saName').onchange = function () { pushUndo(); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
@@ -1604,38 +1569,6 @@ window.SOS = window.SOS || {};
     box.querySelector('#saDn').onclick = function () { reorderSelectedAsset(-1); };
     box.querySelector('#saDup').onclick = duplicateSelectedAsset;
     box.querySelector('#saDel').onclick = deleteSelectedAsset;
-    box.querySelector('#saPreset').onchange = function () {
-      var pk = this.value, pr = S.SatBlending && S.SatBlending.PRESETS[pk];
-      this.value = '';
-      if (!pr) return;
-      pushUndo();
-      if (pr.elevationM !== null) a.elevationM = pr.elevationM;
-      if (pr.shadowEnabled !== null) a.shadowEnabled = pr.shadowEnabled;
-      a.filters = Object.assign({}, pr.filters);
-      persistToIDB(); syncUI(); draw();
-    };
-    box.querySelector('#saShOn').onchange = function () { pushUndo(); a.shadowEnabled = !!this.checked; persistToIDB(); draw(); };
-    box.querySelector('#saElev').onchange = function () {
-      pushUndo(); a.elevationM = Math.max(0, parseFloat(this.value) || 0);
-      if (a.elevationM === 0) a.shadowEnabled = false;
-      persistToIDB(); syncUI(); draw();
-    };
-    function bindFilterSlider(id, valId, key, isFloat) {
-      var el = box.querySelector(id), pushed = false;
-      el.oninput = function () {
-        if (!pushed) { pushUndo(); pushed = true; }
-        a.filters[key] = isFloat ? parseFloat(this.value) : (+this.value);
-        box.querySelector(valId).textContent = this.value;
-        draw();
-      };
-      el.onchange = function () { pushed = false; persistToIDB(); };
-    }
-    bindFilterSlider('#saBr', '#saBrV', 'brightness', false);
-    bindFilterSlider('#saCt', '#saCtV', 'contrast', false);
-    bindFilterSlider('#saSa', '#saSaV', 'saturation', false);
-    bindFilterSlider('#saWm', '#saWmV', 'warmth', false);
-    bindFilterSlider('#saBl', '#saBlV', 'blurPx', true);
-    bindFilterSlider('#saGr', '#saGrV', 'grain', false);
     if (box.querySelector('#saCleanA')) {
       box.querySelector('#saCleanA').onclick = function () {
         cloneCfg.pickMode = !cloneCfg.src;
@@ -1644,14 +1577,7 @@ window.SOS = window.SOS || {};
       };
     }
   }
-function syncSunDirBadge() {
-    if (!ov) return;
-    var az = doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135;
-    var cast = ((az + 180) % 360 + 360) % 360;
-    var cLbl = (S.SatBlending && S.SatBlending.compassLabel) ? S.SatBlending.compassLabel : function () { return ''; };
-    var el = ov.querySelector('#scSunDirTxt');
-    if (el) el.textContent = 'Sun: ' + Math.round(az) + '° ' + cLbl(az) + ' ➔ Shadow casts: ' + Math.round(cast) + '° ' + cLbl(cast);
-  }
+
   function syncUI() {
     if (!ov) return;
     syncUndoBtns();
@@ -1718,16 +1644,7 @@ function syncSunDirBadge() {
     ov.querySelector('#scCutPtsV').textContent = String(cutPts.length);
 
     renderAssetInspector();
-  ov.querySelector('#scSunAz').value = Math.round(doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135);
-    ov.querySelector('#scSunAzV').textContent = Math.round(doc.sun.azimuthDeg != null ? doc.sun.azimuthDeg : 135);
-    ov.querySelector('#scSunLen').value = doc.sun.lengthFactor != null ? doc.sun.lengthFactor : 0.75;
-    ov.querySelector('#scSunLenV').textContent = Number(doc.sun.lengthFactor != null ? doc.sun.lengthFactor : 0.75).toFixed(2);
-    ov.querySelector('#scSunOp').value = Math.round((doc.sun.opacity != null ? doc.sun.opacity : 0.38) * 100);
-    ov.querySelector('#scSunOpV').textContent = Math.round((doc.sun.opacity != null ? doc.sun.opacity : 0.38) * 100);
-    ov.querySelector('#scSunBl').value = doc.sun.blurPx != null ? doc.sun.blurPx : 4;
-    ov.querySelector('#scSunBlV').textContent = doc.sun.blurPx != null ? doc.sun.blurPx : 4;
-    ov.querySelector('#scSunCol').value = doc.sun.color || '#2a2118';
-    syncSunDirBadge();
+
     var p1 = calibDraft.p1 || doc.calibration.p1;
     var p2 = calibDraft.p2 || doc.calibration.p2;
     var pxD = (p1 && p2) ? Math.hypot(p2.x - p1.x, p2.y - p1.y) : 0;
@@ -1756,7 +1673,7 @@ function syncSunDirBadge() {
     ov.dataset.ajDone = '1';
     ov.innerHTML =
       '<div class="satc-top">' +
-        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHASE 3)</b>' +
+        '<b class="satc-title">AJ-GeoCAD — SAT STUDIO (PHASE 2)</b>' +
         '<button id="scImportBase" class="on">Import Base</button>' +
         '<button data-sctool="select" class="on">Select / Move</button>' +
         '<button data-sctool="pan">Pan</button>' +
@@ -1821,19 +1738,6 @@ function syncSunDirBadge() {
 
           '<h4>Selected Asset Inspector</h4>' +
           '<div id="scAssetInsp" class="satc-card"></div>' +
-        '<h4>Global Sun Shadow (Multiply)</h4>' +
-          '<div class="satc-card">' +
-            '<div id="scSunDirTxt" class="mut"></div>' +
-            '<label>Sun Azimuth (<span id="scSunAzV">135</span>&deg;)<input type="range" id="scSunAz" min="0" max="359" step="1" value="135"></label>' +
-            '<label>Shadow Length (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label>' +
-            '<label>Shadow Opacity (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" step="1" value="38"></label>' +
-            '<label>Shadow Softness (<span id="scSunBlV">4</span> px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label>' +
-            '<div class="row">' +
-              '<input type="color" id="scSunCol" value="#2a2118" title="Global Shadow Color" style="max-width:44px;padding:1px">' +
-              '<button id="scShWarm" class="amb">Warm Soil</button>' +
-              '<button id="scShCool" class="cy">Cool Neutral</button>' +
-            '</div>' +
-          '</div>' +
 
           '<h4>Site Metric Calibration (px/m)</h4>' +
           '<div class="satc-card">' +
@@ -1960,31 +1864,7 @@ function syncSunDirBadge() {
     };
     ov.querySelector('#scApplyCal').onclick = function () { applyCalibration(ov.querySelector('#scCalM').value); };
     ov.querySelector('#scResetCal').onclick = clearCalibration;
-  function bindSunSlider(id, valId, key, scaleDiv, isFloat) {
-      var el = ov.querySelector(id), pushed = false;
-      el.oninput = function () {
-        if (!pushed) { pushUndo(); pushed = true; }
-        var raw = isFloat ? parseFloat(this.value) : (+this.value);
-        doc.sun[key] = scaleDiv ? (raw / scaleDiv) : raw;
-        ov.querySelector(valId).textContent = this.value;
-        syncSunDirBadge();
-        draw();
-      };
-      el.onchange = function () { pushed = false; persistToIDB(); };
-    }
-    bindSunSlider('#scSunAz', '#scSunAzV', 'azimuthDeg', 0, false);
-    bindSunSlider('#scSunLen', '#scSunLenV', 'lengthFactor', 0, true);
-    bindSunSlider('#scSunOp', '#scSunOpV', 'opacity', 100, false);
-    bindSunSlider('#scSunBl', '#scSunBlV', 'blurPx', 0, true);
-    ov.querySelector('#scSunCol').onchange = function () { pushUndo(); doc.sun.color = this.value; persistToIDB(); draw(); };
-    ov.querySelector('#scShWarm').onclick = function () {
-      pushUndo(); doc.sun.color = (S.SatBlending && S.SatBlending.SHADOW_COLORS.desert) || '#2a2118';
-      persistToIDB(); syncUI(); draw();
-    };
-    ov.querySelector('#scShCool').onclick = function () {
-      pushUndo(); doc.sun.color = (S.SatBlending && S.SatBlending.SHADOW_COLORS.neutral) || '#0f172a';
-      persistToIDB(); syncUI(); draw();
-    };   
+
     if (window.ResizeObserver) new ResizeObserver(resize).observe(cv.parentNode);
     else window.addEventListener('resize', resize);
     built = true;
@@ -2044,7 +1924,6 @@ function syncSunDirBadge() {
 
   function importState(payload) {
     try {
-      if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       if (!payload || typeof payload !== 'object') return false;
       opGen++;
       var snapGen = opGen;
@@ -2074,7 +1953,6 @@ function syncSunDirBadge() {
 
   function clearData(silent) {
     try {
-      if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       opGen++;
       doc = blankDoc();
       bins = blankBins();
