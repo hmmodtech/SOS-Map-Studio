@@ -80,6 +80,105 @@
   body.ui-day [data-aj-txt="amber"]{color:#b45309!important}
   body.ui-day [data-aj-bd="1"]{border-color:#cbd5e1!important}
 </style>
+<style id="aj-layout-fix-css">
+  /* 1. LOCK VIEWPORT (NO PAGE SCROLL — INTERNAL TOOL SCROLL ONLY) */
+  html, body {
+    height: 100%;
+    height: 100dvh;
+    width: 100%;
+    max-width: 100vw;
+    margin: 0;
+    padding: 0;
+    overflow: hidden !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 2. WRAPPED MULTI-ROW TOP HUD (ZERO HORIZONTAL SCROLL ON MOBILE) */
+  #hud {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center;
+    gap: 4px !important;
+    padding: 5px 6px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  #hud .dv, #hud .sp { display: none; }
+  @media (min-width: 1120px) {
+    #hud .dv { display: inline-block; }
+    #hud .sp { display: block; flex: 1; }
+  }
+
+  /* 3. FIXED COLLAPSIBLE SIDEBARS WITH INDEPENDENT INTERNAL SCROLL */
+  #main {
+    flex: 1 1 auto !important;
+    display: flex !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: hidden !important;
+    position: relative;
+    width: 100%;
+  }
+  #cv {
+    flex: 1 1 auto !important;
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  #left, #right {
+    height: 100% !important;
+    max-height: 100% !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+  #left.hide, #right.hide {
+    display: none !important;
+  }
+  #st {
+    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 4. MOBILE & TABLET LAYOUT: SPLIT TOP BAR + SLIDE-OVER SIDEBARS */
+  @media (max-width: 980px) {
+    #hud h1 { display: none !important; }
+    #hud button, #hud input {
+      font-size: 10px !important;
+      padding: 4px 6px !important;
+      line-height: 1.2;
+    }
+    #projName { width: 88px !important; max-width: 26vw !important; }
+    #btnL   { order: -6; }
+    #btnSat { order: -5; font-weight: 800; }
+    #btnGL  { order: -4; }
+    #btnUI  { order: -3; }
+    #btnR   { order: -2; margin-left: auto; }
+
+    #left, #right {
+      position: absolute !important;
+      top: 0;
+      bottom: 0;
+      z-index: 60;
+      width: min(275px, 82vw) !important;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .55);
+    }
+    #left { left: 0; }
+    #right { right: 0; }
+  }
+</style>
 </head>
 <body>
 <header id="hud">
@@ -204,16 +303,15 @@
 <script src="js/signage.js?v=12"></script>
 <script src="js/exporter.js?v=12"></script>
 <script src="js/webgl3d.js?v=12"></script>
-<script src="js/satProcedural.js?v=18"></script>
-<script src="js/satPhotoTools.js?v=18"></script>
-<script src="js/satBlending.js?v=18"></script>
-<script src="js/satExport.js?v=18"></script>
-<script src="js/satThemeUI.js?v=18"></script>
-<script src="js/satGeorefGPS.js?v=18"></script>
-<script src="js/satArcGIS.js?v=18"></script>
-<script src="js/satGeoTerra.js?v=18"></script>
-<script src="js/satComposer.js?v=18"></script>
-
+<script src="js/satProcedural.js?v=19"></script>
+<script src="js/satPhotoTools.js?v=19"></script>
+<script src="js/satBlending.js?v=19"></script>
+<script src="js/satExport.js?v=19"></script>
+<script src="js/satThemeUI.js?v=19"></script>
+<script src="js/satGeorefGPS.js?v=19"></script>
+<script src="js/satArcGIS.js?v=19"></script>
+<script src="js/satGeoTerra.js?v=19"></script>
+<script src="js/satComposer.js?v=19"></script>
 <script>
 (function () {
   var S = window.SOS, St = S.State, E = S.Engine, $ = function (i) { return document.getElementById(i); };
@@ -376,12 +474,22 @@
   $('btnRoute').onclick = function () { if (S.Routing) S.Routing.open(); };
   $('btnSign').onclick = function () { if (S.Signage) S.Signage.open(); };
   $('btnExp').onclick = function () { if (S.Exporter) S.Exporter.open(); };
-  $('btnSat').onclick = function () { if (S.SatComposer) S.SatComposer.open(); };
+  $('btnSat').onclick = function () {
+    if (S.SatComposer) S.SatComposer.open();
+    else alert('Sat Studio failed to load. Verify js/satThemeUI.js, js/satGeorefGPS.js, js/satArcGIS.js, js/satGeoTerra.js, and js/satComposer.js.');
+  };
   $('routeView').onchange = function () { if (S.Routing) S.Routing.setOverlayMode(this.value); };
   $('btnFit').onclick = function () { E.fitView(); };
-  $('btnL').onclick = function () { $('left').classList.toggle('hide'); };
-  $('btnR').onclick = function () { $('right').classList.toggle('hide'); };
-  if (window.innerWidth < 800) { $('left').classList.add('hide'); $('right').classList.add('hide'); }
+
+  function toggleSide(showId, otherId) {
+    var el = $(showId), oth = $(otherId);
+    el.classList.toggle('hide');
+    if (window.innerWidth <= 980 && !el.classList.contains('hide')) oth.classList.add('hide');
+    setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+  }
+  $('btnL').onclick = function () { toggleSide('left', 'right'); };
+  $('btnR').onclick = function () { toggleSide('right', 'left'); };
+  if (window.innerWidth <= 980) { $('left').classList.add('hide'); $('right').classList.add('hide'); }
 
   var tools = document.querySelectorAll('[data-tool]');
   function setTool(t) {
