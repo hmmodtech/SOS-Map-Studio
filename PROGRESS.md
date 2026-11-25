@@ -60,3 +60,6 @@
 - `js/satExport.js` — **[v16 — STEPS 1–2 VERIFIED]** Isolated `04_Print_Overlays` & Dual High-Res Safe Exporter.
 - `js/satComposer.js` — **[v16 — STEPS 1–2 VERIFIED]** Isolated Satellite Patch & Poster Composer module.
 - `css/style.css`, `js/kmlParser.js`, `js/engine.js`, `js/interior.js`, `js/routing.js`, `js/signage.js`, `js/exporter.js`, `js/webgl3d.js` — **[UNMODIFIED & COMPATIBLE — v12]**.
+- 
+​[✓] Phase 1 — js/satThemeUI.js: مكتمل بالكامل وجاهز (الهوية البصرية Cyber HUD + الوضع النهاري ui-day + التجاوب للجوال/التابلت/اللابتوب + القوائم العلوية + عمود الأيقونات مع Hover ودليل التعليمات الحي + أزرار إخفاء/إظهار الأشرطة + شريط مقارنة قبل/بعد).
+​[→] Phase 2 — js/satGeorefGPS.js: التالي مباشرة (إصلاح شامل لمحرك الربط الجغرافي بـ 4 نماذج + جدول GCP وRMS + محوّل الإحداثيات DD / DMS / UTM 36N / Web Mercator + محلل اللصق الذكي + محرك GPS المطوّر بفلترة Kalman ومتوسط القراءات وتصحيح تشويش الـ GPS + البوصلة الحية + تصدير .pgw و.prj لـ ArcGIS/QGIS).
