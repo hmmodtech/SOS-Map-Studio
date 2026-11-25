@@ -1,4 +1,4 @@
-# AJ-GeoCAD Studio — PROGRESS.md
+ن# AJ-GeoCAD Studio — PROGRESS.md
 
 ## System Status
 - **Production Baseline (`main`):** `v12 COMPLETE` (3D Architectural, GIS & AutoCAD Platform — backwards-compatible with `.ajcad.json`, `.sos.json`, and generic `.json` project files).
@@ -7,7 +7,9 @@
 - **Dual Studio UI Themes:**
   - **Cyber HUD (Permanent Visual Identity):** Deep Navy (`#060d18` / `#0a1626`), Dark Petrol borders (`#1b3b57`), Aqua-to-Cyber-Green gradient (`#00b4d8 → #00ff9d`) with Soft Neon Bloom, Muted Gray-Blue (`#7f9bb5`) body text, and Desaturated Green (`#78b5a0`) section headers.
   - **Daylight Design Mode (`UI: Daylight`):** High-contrast daylight UI (`#eef3f8` / `#f8fafc` / `#0f172a`) saved in `localStorage` (`aj_geocad_ui`) and synced with the Daylight architectural map view.
-
+​[✓] Phase 1 — js/satThemeUI.js: مكتمل.
+​[✓] Phase 2 — js/satGeorefGPS.js: مكتمل (إصلاح شامل للربط الجغرافي والـ GPS + 4 نماذج + جدول GCP وRMS + DD/DMS/UTM + تصدير .pgw/.prj/KML).
+​[→] Phase 3 — js/satArcGIS.js: التالي مباشرة (أدوات ArcGIS المتجهية والطوبولوجيا والتحليل المكاني: النقاط/الخطوط/المضلعات/الدوائر، الالتقاط المغناطيسي Snapping وCOGO، Split / Merge / Clip، Buffer / Multi-Ring، Range Rings، 2D Viewshed، Heatmap، Spatial Query، مصفوفة أقرب مخرج، جدول الصفات وتصدير CSV / GeoJSON / KML / GPX).
 ---
 
 ## Baseline Reconciliation (`v10` ➔ `v12` Pre-Module State)
