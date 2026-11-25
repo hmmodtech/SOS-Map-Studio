@@ -464,7 +464,7 @@ window.SOS = window.SOS || {};
   // =========================================================================
   var MENUS = [
     {
-      id: 'file', ar: 'ملف (File)', en: 'File',
+      id: 'file', ar: 'ملف', en: 'File',
       items: [
         { act: 'import_base', ar: 'استيراد خريطة الأساس (Base Satellite)', en: 'Import Base Satellite...', k: 'Ctrl+O' },
         { act: 'import_cleanup', ar: 'استيراد طبقة تنظيف جاهزة (Cleanup)', en: 'Load Pre-Cleaned Layer...' },
@@ -482,7 +482,7 @@ window.SOS = window.SOS || {};
       ]
     },
     {
-      id: 'edit', ar: 'تحرير (Edit)', en: 'Edit',
+      id: 'edit', ar: 'تحرير', en: 'Edit',
       items: [
         { act: 'undo', ar: 'تراجع (Undo)', en: 'Undo', k: 'Ctrl+Z' },
         { act: 'redo', ar: 'إعادة (Redo)', en: 'Redo', k: 'Ctrl+Y' },
@@ -497,7 +497,7 @@ window.SOS = window.SOS || {};
       ]
     },
     {
-      id: 'view', ar: 'عرض (View)', en: 'View',
+      id: 'view', ar: 'عرض', en: 'View',
       items: [
         { act: 'fit', ar: 'ملاءمة الخريطة للشاشة (Fit View)', en: 'Fit to Screen', k: '0' },
         { act: 'zoom_100', ar: 'تكبير أصلي 100% (1:1 Pixels)', en: 'Native 100% Pixels', k: '1' },
@@ -516,7 +516,7 @@ window.SOS = window.SOS || {};
       ]
     },
     {
-      id: 'gis', ar: 'خرائط وGIS (ArcGIS)', en: 'Map & GIS',
+      id: 'gis', ar: 'ArcGIS', en: 'Map & GIS',
       items: [
         { act: 'tool:calibrate', ar: 'معايرة المقياس (2-Point px/m)', en: '2-Point Metric Scale Calibration' },
         { act: 'tool:bearing_cal', ar: 'معايرة الشمال الحقيقي والاتجاهات', en: 'True North & Bearing Calibration' },
@@ -543,7 +543,7 @@ window.SOS = window.SOS || {};
       ]
     },
     {
-      id: 'geoterra', ar: 'GeoTerra الميداني', en: 'GeoTerra',
+      id: 'geoterra', ar: 'GeoTerra', en: 'GeoTerra',
       items: [
         { act: 'open_gt_panel', ar: 'فتح لوحة GeoTerra الكاملة', en: 'Open GeoTerra Workspace Panel' },
         { sep: true },
@@ -561,7 +561,7 @@ window.SOS = window.SOS || {};
       ]
     },
     {
-      id: 'cad3d', ar: '3D وCAD', en: '3D & CAD',
+      id: 'cad3d', ar: '3D/CAD', en: '3D & CAD',
       items: [
         { act: 'sync_cad_north', ar: 'مزامنة الشمال مع AJ-GeoCAD', en: 'Sync True North from AJ-GeoCAD' },
         { act: 'push_gis_to_cad', ar: 'إرسال المضلعات المرسومة إلى 2D CAD', en: 'Push Drawn Polygons to 2D CAD' },
@@ -573,21 +573,22 @@ window.SOS = window.SOS || {};
   ];
 
   // =========================================================================
-  // 4. COMPLETE CYBER HUD + DAYLIGHT + RESPONSIVE CSS INJECTION
+  // 4. COMPLETE CYBER HUD + DAYLIGHT + FIXED-DOCK RESPONSIVE CSS
   // =========================================================================
   function ensureCss() {
     if (document.getElementById('aj-sat-pro-css')) return;
     var st = document.createElement('style');
     st.id = 'aj-sat-pro-css';
     st.textContent =
-      // Cyber HUD Root Variables (Midnight Navy + Dark Petrol + Cyber Green + Amber + Danger Red)
+      // Cyber HUD Root Variables + Viewport Lock (No Page Scroll)
       '.satc-pro{' +
         '--sc-bg:#080b10;--sc-panel:#0c121b;--sc-panel2:#101926;--sc-input:#06090e;' +
         '--sc-border:#15222e;--sc-border-hi:#1f3b52;--sc-green:#39ff14;--sc-green2:#00ff66;' +
         '--sc-cyan:#00e5ff;--sc-amber:#e8c84a;--sc-red:#ff3c3c;--sc-purple:#c084fc;' +
         '--sc-txt:#d9ecff;--sc-sub:#78b5a0;--sc-mut:#7c97b0;--sc-shadow:0 8px 28px rgba(0,0,0,.65);' +
-        'position:fixed;inset:0;z-index:945;background:var(--sc-bg);color:var(--sc-txt);' +
-        'display:flex;flex-direction:column;font-family:' + MONO + ';font-size:11.5px;overflow:hidden;' +
+        'position:fixed;inset:0;width:100%;max-width:100vw;height:100%;height:100dvh;z-index:945;' +
+        'background:var(--sc-bg);color:var(--sc-txt);display:flex;flex-direction:column;' +
+        'font-family:' + MONO + ';font-size:11.5px;overflow:hidden;' +
       '}' +
       // Daylight Mode (ui-day) Complete Override
       'body.ui-day .satc-pro{' +
@@ -599,144 +600,145 @@ window.SOS = window.SOS || {};
       '.satc-pro.hide{display:none!important}' +
       '.satc-pro *{box-sizing:border-box}' +
 
-      // Top Menu Bar (Photoshop + ArcGIS)
-      '.satc-menubar{display:flex;align-items:center;gap:3px;height:36px;padding:0 8px;background:var(--sc-panel);border-bottom:1px solid var(--sc-border);flex-shrink:0;z-index:40;user-select:none}' +
-      '.satc-brand{font-weight:800;font-size:11.5px;letter-spacing:.7px;white-space:nowrap;padding-inline-end:8px;margin-inline-end:4px;border-inline-end:1px solid var(--sc-border);color:var(--sc-green2)}' +
-      'body.ui-day .satc-brand{color:#0369a1}' +
-      '.satc-menus{display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none}' +
-      '.satc-menus::-webkit-scrollbar{display:none}' +
-      '.satc-mwrap{position:relative}' +
-      '.satc-mbtn{background:transparent;border:1px solid transparent;color:var(--sc-txt);padding:4px 8px;border-radius:4px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}' +
-      '.satc-mbtn:hover,.satc-mwrap.open .satc-mbtn{background:var(--sc-panel2);border-color:var(--sc-border-hi);color:var(--sc-cyan)}' +
-      '.satc-drop{display:none;position:fixed;min-width:255px;max-height:76vh;overflow-y:auto;background:var(--sc-panel);border:1px solid var(--sc-border-hi);border-radius:6px;padding:4px;box-shadow:var(--sc-shadow);z-index:120}' +
-      '.satc-mwrap.open .satc-drop{display:block}' +
-      '.satc-ditem{width:100%;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:6px 9px;border:0;background:transparent;color:var(--sc-txt);border-radius:4px;font-family:inherit;font-size:11px;text-align:start;cursor:pointer}' +
-      '.satc-ditem:hover{background:rgba(0,229,255,.14);color:var(--sc-cyan)}' +
-      '.satc-ditem.dng{color:var(--sc-red)}' +
-      '.satc-ditem.dng:hover{background:rgba(255,60,60,.16)}' +
-      '.satc-dkey{font-size:9.5px;color:var(--sc-mut);white-space:nowrap}' +
-      '.satc-dsep{height:1px;background:var(--sc-border);margin:4px 3px}' +
+      // Top Menu Bar (Multi-Row Wrap — ZERO Horizontal Scroll on Mobile)
+      '.satc-pro .satc-menubar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-height:36px;height:auto;padding:4px 8px;background:var(--sc-panel);border-bottom:1px solid var(--sc-border);flex-shrink:0;z-index:40;user-select:none}' +
+      '.satc-pro .satc-brand{font-weight:800;font-size:11.5px;letter-spacing:.7px;white-space:nowrap;padding-inline-end:8px;margin-inline-end:4px;border-inline-end:1px solid var(--sc-border);color:var(--sc-green2)}' +
+      'body.ui-day .satc-pro .satc-brand{color:#0369a1}' +
+      '.satc-pro .satc-menus{display:flex;flex-wrap:wrap;align-items:center;gap:2px;overflow:visible}' +
+      '.satc-pro .satc-mwrap{position:relative}' +
+      '.satc-pro .satc-mbtn{background:transparent!important;border:1px solid transparent!important;color:var(--sc-txt)!important;padding:4px 8px;border-radius:4px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;box-shadow:none!important}' +
+      '.satc-pro .satc-mbtn:hover,.satc-pro .satc-mwrap.open .satc-mbtn{background:var(--sc-panel2)!important;border-color:var(--sc-border-hi)!important;color:var(--sc-cyan)!important}' +
+      '.satc-pro .satc-drop{display:none;position:fixed;min-width:240px;max-width:calc(100vw - 12px);max-height:72dvh;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--sc-panel);border:1px solid var(--sc-border-hi);border-radius:6px;padding:4px;box-shadow:var(--sc-shadow);z-index:120}' +
+      '.satc-pro .satc-mwrap.open .satc-drop{display:block}' +
+      '.satc-pro .satc-ditem{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 9px;border:0!important;background:transparent!important;color:var(--sc-txt)!important;border-radius:4px;font-family:inherit;font-size:11px;text-align:start;cursor:pointer;box-shadow:none!important}' +
+      '.satc-pro .satc-ditem:hover{background:rgba(0,229,255,.14)!important;color:var(--sc-cyan)!important}' +
+      '.satc-pro .satc-ditem.dng{color:var(--sc-red)!important}' +
+      '.satc-pro .satc-ditem.dng:hover{background:rgba(255,60,60,.16)!important}' +
+      '.satc-pro .satc-dkey{font-size:9.5px;color:var(--sc-mut);white-space:nowrap}' +
+      '.satc-pro .satc-dsep{height:1px;background:var(--sc-border);margin:4px 3px}' +
 
-      // Quick Right Action Buttons in Menu Bar
-      '.satc-mquick{margin-inline-start:auto;display:flex;align-items:center;gap:4px;flex-shrink:0}' +
-      '.satc-qbtn{background:var(--sc-input);border:1px solid var(--sc-border);color:var(--sc-txt);padding:4px 7px;border-radius:4px;font-family:inherit;font-size:11px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}' +
-      '.satc-qbtn:hover{border-color:var(--sc-cyan);color:var(--sc-cyan)}' +
-      '.satc-qbtn.on{border-color:var(--sc-green2);color:var(--sc-green2);background:rgba(0,255,102,.1)}' +
-      '.satc-qbtn.amb{border-color:var(--sc-amber);color:var(--sc-amber)}' +
-      '.satc-qbtn.dng{border-color:var(--sc-red);color:var(--sc-red)}' +
+      // Quick Action Buttons in Menu Bar
+      '.satc-pro .satc-mquick{margin-inline-start:auto;display:flex;align-items:center;gap:4px;flex-shrink:0}' +
+      '.satc-pro .satc-qbtn{background:var(--sc-input)!important;border:1px solid var(--sc-border)!important;color:var(--sc-txt)!important;padding:4px 7px;border-radius:4px;font-family:inherit;font-size:11px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:4px;box-shadow:none!important}' +
+      '.satc-pro .satc-qbtn:hover{border-color:var(--sc-cyan)!important;color:var(--sc-cyan)!important}' +
+      '.satc-pro .satc-qbtn.on{border-color:var(--sc-green2)!important;color:var(--sc-green2)!important;background:rgba(0,255,102,.12)!important}' +
+      'body.ui-day .satc-pro .satc-qbtn.on{background:#dcfce7!important}' +
+      '.satc-pro .satc-qbtn.amb{border-color:var(--sc-amber)!important;color:var(--sc-amber)!important;background:rgba(232,200,74,.1)!important}' +
+      'body.ui-day .satc-pro .satc-qbtn.amb{background:#fef3c7!important}' +
+      '.satc-pro .satc-qbtn.dng{border-color:var(--sc-red)!important;color:var(--sc-red)!important}' +
 
-      // Main 3-Column Workspace Body
-      '.satc-work{flex:1;display:flex;min-height:0;position:relative;overflow:hidden}' +
+      // Main 3-Column Workspace Body (Fixed Height — Internal Scroll Only)
+      '.satc-pro .satc-work{flex:1 1 auto;display:flex;min-height:0;height:auto;position:relative;overflow:hidden}' +
 
-      // Left Dock (Icon Rail + Live Tool Guide + Active Tool Options)
-      '.satc-left{display:flex;background:var(--sc-panel);border-inline-end:1px solid var(--sc-border);flex-shrink:0;z-index:25;transition:width .16s ease,transform .18s ease}' +
-      '.satc-left.collapsed{width:0!important;overflow:hidden;border:0}' +
-      '.satc-rail{width:50px;background:var(--sc-input);border-inline-end:1px solid var(--sc-border);padding:6px 4px;overflow-y:auto;display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;scrollbar-width:thin}' +
-      '.satc-rsep{width:32px;height:1px;background:var(--sc-border-hi);margin:4px 0;flex-shrink:0}' +
-      '.satc-tbtn{width:38px;height:36px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--sc-txt);cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;padding:0}' +
-      '.satc-tbtn svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}' +
-      '.satc-tbtn:hover{background:var(--sc-panel2);border-color:var(--sc-cyan);color:var(--sc-cyan)}' +
-      '.satc-tbtn.on{background:rgba(57,255,20,.14);border-color:var(--sc-green);color:var(--sc-green);box-shadow:0 0 8px rgba(57,255,20,.2)}' +
-      'body.ui-day .satc-tbtn.on{background:rgba(22,163,74,.16);box-shadow:none}' +
-      '.satc-tbtn.cat-geoterra.on{background:rgba(192,132,252,.18);border-color:var(--sc-purple);color:var(--sc-purple);box-shadow:none}' +
-      '.satc-tbtn.cat-gis.on{background:rgba(0,229,255,.15);border-color:var(--sc-cyan);color:var(--sc-cyan);box-shadow:none}' +
-      '.satc-tkey{position:absolute;bottom:1px;right:3px;font-size:8px;opacity:.65;font-weight:700}' +
+      // Left Dock (Fixed Height Icon Rail + Independent Scroll Live Guide & Options)
+      '.satc-pro .satc-left{display:flex;height:100%;max-height:100%;overflow:hidden;background:var(--sc-panel);border-inline-end:1px solid var(--sc-border);flex-shrink:0;z-index:25}' +
+      '.satc-pro .satc-left.collapsed{display:none!important}' +
+      '.satc-pro .satc-rail{width:50px;height:100%;max-height:100%;background:var(--sc-input);border-inline-end:1px solid var(--sc-border);padding:6px 4px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;scrollbar-width:thin}' +
+      '.satc-pro .satc-rsep{width:32px;height:1px;background:var(--sc-border-hi);margin:4px 0;flex-shrink:0}' +
+      '.satc-pro .satc-tbtn{width:38px;height:36px;border-radius:6px;border:1px solid transparent!important;background:transparent!important;color:var(--sc-txt)!important;cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;padding:0;box-shadow:none!important}' +
+      '.satc-pro .satc-tbtn svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}' +
+      '.satc-pro .satc-tbtn:hover{background:var(--sc-panel2)!important;border-color:var(--sc-cyan)!important;color:var(--sc-cyan)!important}' +
+      '.satc-pro .satc-tbtn.on{background:rgba(57,255,20,.14)!important;border-color:var(--sc-green)!important;color:var(--sc-green)!important;box-shadow:0 0 8px rgba(57,255,20,.2)!important}' +
+      'body.ui-day .satc-pro .satc-tbtn.on{background:#dcfce7!important;box-shadow:none!important}' +
+      '.satc-pro .satc-tbtn.cat-geoterra.on{background:rgba(192,132,252,.18)!important;border-color:var(--sc-purple)!important;color:var(--sc-purple)!important;box-shadow:none!important}' +
+      '.satc-pro .satc-tbtn.cat-gis.on{background:rgba(0,229,255,.15)!important;border-color:var(--sc-cyan)!important;color:var(--sc-cyan)!important;box-shadow:none!important}' +
+      '.satc-pro .satc-tkey{position:absolute;bottom:1px;right:3px;font-size:8px;opacity:.65;font-weight:700}' +
 
-      // Left Sub-Panel (Live Tool Guide + Active Tool Controls)
-      '.satc-lsub{width:236px;padding:8px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;background:var(--sc-panel)}' +
-      '.satc-lsub.hide-guide{display:none}' +
-      '.satc-guide{background:var(--sc-input);border:1px solid var(--sc-border-hi);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:5px}' +
-      '.satc-guide-hd{display:flex;align-items:center;justify-content:space-between;gap:6px}' +
-      '.satc-guide-hd b{color:var(--sc-cyan);font-size:11.5px}' +
-      '.satc-guide-desc{color:var(--sc-txt);font-size:11px;line-height:1.45}' +
-      '.satc-guide-steps{margin:2px 0 0;padding-inline-start:16px;color:var(--sc-mut);font-size:10.5px;line-height:1.5}' +
-      '.satc-guide-steps li{margin-bottom:2px}' +
+      // Left Sub-Panel (Live Tool Guide + Active Tool Controls — Internal Scroll Only)
+      '.satc-pro .satc-lsub{width:236px;height:100%;max-height:100%;padding:8px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:8px;background:var(--sc-panel)}' +
+      '.satc-pro .satc-lsub.hide-guide{display:none}' +
+      '.satc-pro .satc-guide{background:var(--sc-input);border:1px solid var(--sc-border-hi);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:5px}' +
+      '.satc-pro .satc-guide-hd{display:flex;align-items:center;justify-content:space-between;gap:6px}' +
+      '.satc-pro .satc-guide-hd b{color:var(--sc-cyan);font-size:11.5px}' +
+      '.satc-pro .satc-guide-desc{color:var(--sc-txt);font-size:11px;line-height:1.45}' +
+      '.satc-pro .satc-guide-steps{margin:2px 0 0;padding-inline-start:16px;color:var(--sc-mut);font-size:10.5px;line-height:1.5}' +
+      '.satc-pro .satc-guide-steps li{margin-bottom:2px}' +
 
       // Floating Hover Tooltip
-      '.satc-tip{position:fixed;z-index:160;pointer-events:none;background:var(--sc-panel);border:1px solid var(--sc-cyan);color:var(--sc-txt);padding:6px 9px;border-radius:6px;box-shadow:var(--sc-shadow);max-width:240px;display:none}' +
+      '.satc-tip{position:fixed;z-index:160;pointer-events:none;background:#0c121b;border:1px solid #00e5ff;color:#d9ecff;padding:6px 9px;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.6);max-width:240px;display:none;font-family:' + MONO + '}' +
+      'body.ui-day .satc-tip{background:#ffffff;border-color:#0369a1;color:#0f172a;box-shadow:0 8px 22px rgba(15,23,42,.18)}' +
       '.satc-tip.show{display:block}' +
-      '.satc-tip b{color:var(--sc-green2);font-size:11px;display:block;margin-bottom:2px}' +
-      '.satc-tip span{font-size:10px;color:var(--sc-mut);line-height:1.35;display:block}' +
+      '.satc-tip b{color:#00ff66;font-size:11px;display:block;margin-bottom:2px}' +
+      'body.ui-day .satc-tip b{color:#15803d}' +
+      '.satc-tip span{font-size:10px;opacity:.85;line-height:1.35;display:block}' +
 
-      // Center Stage + Bottom Collapsible Drawer (Attribute Table & History)
-      '.satc-center{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}' +
-      '.satc-cvwrap{flex:1;position:relative;min-width:0;min-height:0;overflow:hidden;background:var(--sc-input)}' +
+      // Center Stage + Bottom Collapsible Drawer
+      '.satc-pro .satc-center{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;position:relative;overflow:hidden}' +
+      '.satc-pro .satc-cvwrap{flex:1 1 auto;position:relative;min-width:0;min-height:0;height:100%;overflow:hidden;background:var(--sc-input)}' +
       '#scCv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}' +
 
       // Edge Collapse Handles
-      '.satc-edge-btn{position:absolute;top:50%;transform:translateY(-50%);z-index:22;width:18px;height:52px;background:var(--sc-panel);border:1px solid var(--sc-border-hi);color:var(--sc-cyan);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:10px;padding:0;opacity:.85}' +
-      '.satc-edge-btn:hover{opacity:1;border-color:var(--sc-green2);color:var(--sc-green2)}' +
-      '.satc-edge-btn.l{left:0;border-left:0;border-radius:0 6px 6px 0}' +
-      '.satc-edge-btn.r{right:0;border-right:0;border-radius:6px 0 0 6px}' +
+      '.satc-pro .satc-edge-btn{position:absolute;top:50%;transform:translateY(-50%);z-index:22;width:20px;height:54px;background:var(--sc-panel)!important;border:1px solid var(--sc-border-hi)!important;color:var(--sc-cyan)!important;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;padding:0;opacity:.88;box-shadow:none!important}' +
+      '.satc-pro .satc-edge-btn:hover{opacity:1;border-color:var(--sc-green2)!important;color:var(--sc-green2)!important}' +
+      '.satc-pro .satc-edge-btn.l{left:0;border-left:0!important;border-radius:0 6px 6px 0}' +
+      '.satc-pro .satc-edge-btn.r{right:0;border-right:0!important;border-radius:6px 0 0 6px}' +
 
       // Before/After Swipe Handle
-      '.satc-swipe{position:absolute;top:0;bottom:0;left:50%;width:3px;background:var(--sc-green);z-index:20;display:none;cursor:ew-resize;box-shadow:0 0 10px rgba(57,255,20,.6)}' +
-      '.satc-swipe.on{display:block}' +
-      '.satc-swipe-knob{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;background:var(--sc-panel);border:2px solid var(--sc-green);color:var(--sc-green);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;user-select:none}' +
+      '.satc-pro .satc-swipe{position:absolute;top:0;bottom:0;left:50%;width:3px;background:var(--sc-green);z-index:20;display:none;cursor:ew-resize;box-shadow:0 0 10px rgba(57,255,20,.6)}' +
+      '.satc-pro .satc-swipe.on{display:block}' +
+      '.satc-pro .satc-swipe-knob{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;background:var(--sc-panel);border:2px solid var(--sc-green);color:var(--sc-green);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;user-select:none}' +
 
-      // Right Dock (Layers + Scale + Inspector + Sun + GeoTerra + Export)
-      '.satc-right{width:300px;background:var(--sc-panel);border-inline-start:1px solid var(--sc-border);padding:8px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;flex-shrink:0;z-index:25;transition:width .16s ease,transform .18s ease}' +
-      '.satc-right.collapsed{width:0!important;padding:0!important;overflow:hidden;border:0}' +
-      '.satc-sec-h{margin:4px 0 2px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--sc-sub);border-bottom:1px solid var(--sc-border);padding-bottom:3px;display:flex;align-items:center;justify-content:space-between;cursor:pointer}' +
-      '.satc-card{background:var(--sc-input);border:1px solid var(--sc-border);border-radius:5px;padding:7px 8px;display:flex;flex-direction:column;gap:5px;font-size:11px}' +
-      '.satc-layer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 7px;border:1px solid var(--sc-border);border-radius:5px;background:var(--sc-input);font-size:11px}' +
-      '.satc-layer.off{opacity:.52}' +
-      '.satc-eye{background:transparent;border:1px solid var(--sc-border-hi);color:var(--sc-green2);width:26px;height:24px;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:12px;padding:0;flex-shrink:0}' +
-      '.satc-layer.off .satc-eye{color:var(--sc-mut);border-color:var(--sc-border)}' +
-      '.satc-tag{font-size:9px;padding:2px 5px;border-radius:3px;border:1px solid var(--sc-border-hi);color:var(--sc-mut);white-space:nowrap}' +
-      '.satc-tag.lk{border-color:var(--sc-amber);color:var(--sc-amber)}' +
-      '.satc-tag.ok{border-color:var(--sc-green2);color:var(--sc-green2)}' +
-      '.satc-tag.gis{border-color:var(--sc-cyan);color:var(--sc-cyan)}' +
-      '.satc-tag.gt{border-color:var(--sc-purple);color:var(--sc-purple)}' +
-      '.satc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:5px}' +
-      '.satc-alist{display:flex;flex-direction:column;gap:4px;max-height:175px;overflow-y:auto}' +
-      '.satc-ait{display:flex;align-items:center;justify-content:space-between;gap:5px;padding:5px 6px;border:1px solid var(--sc-border);border-radius:4px;background:var(--sc-panel);cursor:pointer;font-size:11px}' +
-      '.satc-ait.sel{border-color:var(--sc-green2);background:rgba(0,255,102,.1)}' +
-      '.satc-ait span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}' +
+      // Right Dock (Fixed Height — Internal Scroll Only — Completely Collapsible)
+      '.satc-pro .satc-right{width:300px;height:100%;max-height:100%;background:var(--sc-panel);border-inline-start:1px solid var(--sc-border);padding:8px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:7px;flex-shrink:0;z-index:25}' +
+      '.satc-pro .satc-right.collapsed{display:none!important}' +
+      '.satc-pro .satc-sec-h{margin:4px 0 2px;font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--sc-sub);border-bottom:1px solid var(--sc-border);padding-bottom:3px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}' +
+      '.satc-pro .satc-card{background:var(--sc-input);border:1px solid var(--sc-border);border-radius:5px;padding:7px 8px;display:flex;flex-direction:column;gap:5px;font-size:11px;flex-shrink:0}' +
+      '.satc-pro .satc-layer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 7px;border:1px solid var(--sc-border);border-radius:5px;background:var(--sc-input);font-size:11px;flex-shrink:0}' +
+      '.satc-pro .satc-layer.off{opacity:.52}' +
+      '.satc-pro .satc-eye{background:transparent!important;border:1px solid var(--sc-border-hi)!important;color:var(--sc-green2)!important;width:26px;height:24px;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:12px;padding:0;flex-shrink:0;box-shadow:none!important}' +
+      '.satc-pro .satc-layer.off .satc-eye{color:var(--sc-mut)!important;border-color:var(--sc-border)!important}' +
+      '.satc-pro .satc-tag{font-size:9px;padding:2px 5px;border-radius:3px;border:1px solid var(--sc-border-hi);color:var(--sc-mut);white-space:nowrap}' +
+      '.satc-pro .satc-tag.lk{border-color:var(--sc-amber);color:var(--sc-amber)}' +
+      '.satc-pro .satc-tag.ok{border-color:var(--sc-green2);color:var(--sc-green2)}' +
+      '.satc-pro .satc-tag.gis{border-color:var(--sc-cyan);color:var(--sc-cyan)}' +
+      '.satc-pro .satc-tag.gt{border-color:var(--sc-purple);color:var(--sc-purple)}' +
+      '.satc-pro .satc-grid2{display:grid;grid-template-columns:1fr 1fr;gap:5px}' +
+      '.satc-pro .satc-alist{display:flex;flex-direction:column;gap:4px;max-height:175px;overflow-y:auto;overscroll-behavior:contain}' +
+      '.satc-pro .satc-ait{display:flex;align-items:center;justify-content:space-between;gap:5px;padding:5px 6px;border:1px solid var(--sc-border);border-radius:4px;background:var(--sc-panel);cursor:pointer;font-size:11px}' +
+      '.satc-pro .satc-ait.sel{border-color:var(--sc-green2);background:rgba(0,255,102,.1)}' +
+      '.satc-pro .satc-ait span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}' +
 
-      // Bottom Collapsible Drawer (Attribute Table & History)
-      '.satc-bottom{height:0;overflow:hidden;background:var(--sc-panel);border-top:1px solid var(--sc-border);display:flex;flex-direction:column;transition:height .16s ease;flex-shrink:0}' +
-      '.satc-bottom.open{height:215px}' +
-      '.satc-btabs{display:flex;align-items:center;gap:6px;padding:4px 8px;background:var(--sc-panel2);border-bottom:1px solid var(--sc-border);flex-shrink:0}' +
-      '.satc-btab{background:transparent;border:1px solid transparent;color:var(--sc-mut);padding:3px 9px;border-radius:4px;font-family:inherit;font-size:10.5px;cursor:pointer}' +
-      '.satc-btab.on{background:var(--sc-input);border-color:var(--sc-cyan);color:var(--sc-cyan);font-weight:700}' +
-      '.satc-bbody{flex:1;overflow:auto;padding:6px 8px}' +
-      '.satc-tbl{width:100%;border-collapse:collapse;font-size:10.5px}' +
-      '.satc-tbl th,.satc-tbl td{border:1px solid var(--sc-border);padding:4px 6px;text-align:start;white-space:nowrap}' +
-      '.satc-tbl th{background:var(--sc-panel2);color:var(--sc-cyan);position:sticky;top:0;z-index:2}' +
-      '.satc-tbl tr:hover td{background:rgba(0,229,255,.08);cursor:pointer}' +
-      '.satc-tbl tr.sel td{background:rgba(57,255,20,.14)}' +
+      // Bottom Collapsible Drawer (Attribute Table, GCP Table & History)
+      '.satc-pro .satc-bottom{height:0;overflow:hidden;background:var(--sc-panel);border-top:1px solid var(--sc-border);display:flex;flex-direction:column;transition:height .16s ease;flex-shrink:0}' +
+      '.satc-pro .satc-bottom.open{height:215px}' +
+      '.satc-pro .satc-btabs{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:4px 8px;background:var(--sc-panel2);border-bottom:1px solid var(--sc-border);flex-shrink:0}' +
+      '.satc-pro .satc-btab{background:transparent!important;border:1px solid transparent!important;color:var(--sc-mut)!important;padding:3px 9px;border-radius:4px;font-family:inherit;font-size:10.5px;cursor:pointer;box-shadow:none!important}' +
+      '.satc-pro .satc-btab.on{background:var(--sc-input)!important;border-color:var(--sc-cyan)!important;color:var(--sc-cyan)!important;font-weight:700}' +
+      '.satc-pro .satc-bbody{flex:1;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:6px 8px}' +
+      '.satc-pro .satc-tbl{width:100%;border-collapse:collapse;font-size:10.5px}' +
+      '.satc-pro .satc-tbl th,.satc-pro .satc-tbl td{border:1px solid var(--sc-border);padding:4px 6px;text-align:start;white-space:nowrap}' +
+      '.satc-pro .satc-tbl th{background:var(--sc-panel2);color:var(--sc-cyan);position:sticky;top:0;z-index:2}' +
+      '.satc-pro .satc-tbl tr:hover td{background:rgba(0,229,255,.08);cursor:pointer}' +
+      '.satc-pro .satc-tbl tr.sel td{background:rgba(57,255,20,.14)}' +
 
-      // Footer Status Bar (Coordinates DD/DMS/UTM + Scale + IDB)
-      '.satc-foot{display:flex;align-items:center;gap:10px;padding:4px 10px;background:var(--sc-panel);border-top:1px solid var(--sc-border);font-size:10px;flex-shrink:0;overflow-x:auto}' +
-      '#scStatus{flex:1;min-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--sc-cyan)}' +
-      '.satc-fchip{padding:1px 6px;border-radius:4px;border:1px solid var(--sc-border);background:var(--sc-input);color:var(--sc-txt);white-space:nowrap;cursor:pointer}' +
+      // Footer Status Bar (Fixed Height, Clean Wrap on Small Screens)
+      '.satc-pro .satc-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 8px;background:var(--sc-panel);border-top:1px solid var(--sc-border);font-size:10px;flex-shrink:0}' +
+      '#scStatus{flex:1 1 160px;min-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--sc-cyan)}' +
+      '.satc-pro .satc-fchip{padding:2px 6px;border-radius:4px;border:1px solid var(--sc-border);background:var(--sc-input);color:var(--sc-txt);white-space:nowrap;cursor:pointer}' +
       '#scIdb{color:var(--sc-green2);white-space:nowrap}' +
 
       // Clean Field Mode (Hides Chrome for Maximum Survey Canvas)
       '.satc-pro.clean-mode .satc-menubar,.satc-pro.clean-mode .satc-left,.satc-pro.clean-mode .satc-right,.satc-pro.clean-mode .satc-bottom,.satc-pro.clean-mode .satc-edge-btn{display:none!important}' +
-      '.satc-cleanbar{display:none;position:absolute;top:10px;right:10px;z-index:35;background:rgba(8,11,16,.92);border:1px solid var(--sc-cyan);border-radius:8px;padding:5px 7px;gap:5px;flex-wrap:wrap;align-items:center;box-shadow:var(--sc-shadow)}' +
-      'body.ui-day .satc-cleanbar{background:rgba(248,250,252,.94)}' +
+      '.satc-pro .satc-cleanbar{display:none;position:absolute;top:10px;right:10px;z-index:35;background:rgba(8,11,16,.92);border:1px solid var(--sc-cyan);border-radius:8px;padding:5px 7px;gap:5px;flex-wrap:wrap;align-items:center;box-shadow:var(--sc-shadow)}' +
+      'body.ui-day .satc-pro .satc-cleanbar{background:rgba(248,250,252,.94)}' +
       '.satc-pro.clean-mode .satc-cleanbar{display:flex}' +
 
-      // Tablet Responsive (768px - 1024px): Slide-over Docks
-      '@media(max-width:1024px){' +
-        '.satc-left{position:absolute;top:0;bottom:0;left:0;box-shadow:var(--sc-shadow)}' +
-        '.satc-right{position:absolute;top:0;bottom:0;right:0;box-shadow:var(--sc-shadow)}' +
-        '.satc-lsub{width:215px}' +
-      '}' +
-      // Mobile Responsive (< 768px — Phone / Samsung A56 Field Survey)
-      '@media(max-width:768px){' +
-        '.satc-brand{display:none}' +
-        '.satc-menubar{height:40px;padding:0 5px}' +
-        '.satc-mbtn{padding:6px 7px;font-size:11px}' +
-        '.satc-qbtn{padding:6px 7px;min-height:32px}' +
-        '.satc-rail{width:52px}' +
-        '.satc-tbtn{width:42px;height:40px}' +
-        '.satc-lsub{width:min(240px,70vw)}' +
-        '.satc-right{width:min(310px,86vw)}' +
-        '.satc-bottom.open{height:42vh}' +
-        '.satc-edge-btn{width:24px;height:56px}' +
+      // Tablet & Mobile Responsive (<= 980px): 2-Row Split Top Bar (Zero Scroll) + Fixed Slide-Over Docks
+      '@media(max-width:980px){' +
+        '.satc-pro .satc-brand{display:none}' +
+        '.satc-pro .satc-menubar{flex-direction:column;align-items:stretch;gap:4px;padding:5px 6px}' +
+        '.satc-pro .satc-menus{width:100%;justify-content:space-between;gap:2px}' +
+        '.satc-pro .satc-mwrap{flex:1 1 auto}' +
+        '.satc-pro .satc-mbtn{width:100%;padding:5px 4px;font-size:10.5px;text-align:center}' +
+        '.satc-pro .satc-mquick{width:100%;margin-inline-start:0;justify-content:space-between;border-top:1px solid var(--sc-border);padding-top:4px;gap:3px}' +
+        '.satc-pro .satc-qbtn{padding:5px 5px;min-height:30px;flex:1 1 auto;font-size:10.5px}' +
+        '.satc-pro .satc-left{position:absolute;top:0;bottom:0;left:0;box-shadow:var(--sc-shadow);max-width:88vw}' +
+        '.satc-pro .satc-right{position:absolute;top:0;bottom:0;right:0;width:min(310px,86vw);box-shadow:var(--sc-shadow)}' +
+        '.satc-pro .satc-rail{width:50px}' +
+        '.satc-pro .satc-tbtn{width:40px;height:38px}' +
+        '.satc-pro .satc-lsub{width:min(230px,calc(88vw - 50px))}' +
+        '.satc-pro .satc-bottom.open{height:40dvh}' +
+        '.satc-pro .satc-edge-btn{width:24px;height:56px}' +
       '}';
     document.head.appendChild(st);
   }
@@ -753,14 +755,14 @@ window.SOS = window.SOS || {};
       '<span class="satc-brand">AJ-GeoCAD STUDIO</span>' +
       '<div class="satc-menus" id="scMenuList"></div>' +
       '<div class="satc-mquick">' +
-        '<button class="satc-qbtn" id="scQLeft" title="Toggle Left Tools">◀</button>' +
-        '<button class="satc-qbtn" id="scQRight" title="Toggle Right Layers">▶</button>' +
-        '<button class="satc-qbtn" id="scQAttr" title="Attribute Table & History">⊞</button>' +
-        '<button class="satc-qbtn" id="scQSwipe" title="Before / After Swipe">◧</button>' +
-        '<button class="satc-qbtn" id="scQClean" title="Clean Field Mode">👁</button>' +
-        '<button class="satc-qbtn" id="scQTheme" title="Cyber HUD / Daylight">☀</button>' +
-        '<button class="satc-qbtn" id="scQLang" title="AR / EN">' + (lang === 'ar' ? 'EN' : 'ع') + '</button>' +
-        '<button class="satc-qbtn on" id="scQClose">CAD</button>' +
+        '<button type="button" class="satc-qbtn" id="scQLeft" title="Toggle Left Tools">◀ Tools</button>' +
+        '<button type="button" class="satc-qbtn" id="scQRight" title="Toggle Right Layers">Layers ▶</button>' +
+        '<button type="button" class="satc-qbtn" id="scQAttr" title="Attribute Table & History">⊞</button>' +
+        '<button type="button" class="satc-qbtn" id="scQSwipe" title="Before / After Swipe">◧</button>' +
+        '<button type="button" class="satc-qbtn" id="scQClean" title="Clean Field Mode">👁</button>' +
+        '<button type="button" class="satc-qbtn" id="scQTheme" title="Cyber HUD / Daylight">☀</button>' +
+        '<button type="button" class="satc-qbtn" id="scQLang" title="AR / EN">' + (lang === 'ar' ? 'EN' : 'ع') + '</button>' +
+        '<button type="button" class="satc-qbtn on" id="scQClose">CAD</button>' +
       '</div>';
 
     var listEl = container.querySelector('#scMenuList');
@@ -774,9 +776,10 @@ window.SOS = window.SOS || {};
       var btn = wrap.querySelector('.satc-mbtn');
       var drop = wrap.querySelector('.satc-drop');
       var r = btn.getBoundingClientRect();
-      drop.style.top = Math.round(r.bottom + 2) + 'px';
+      drop.style.top = Math.round(r.bottom + 3) + 'px';
+      var dw = Math.min(260, window.innerWidth - 12);
       var leftPos = r.left;
-      if (leftPos + 265 > window.innerWidth) leftPos = Math.max(6, window.innerWidth - 270);
+      if (leftPos + dw > window.innerWidth - 6) leftPos = Math.max(6, window.innerWidth - dw - 6);
       drop.style.left = Math.round(leftPos) + 'px';
     }
 
@@ -866,6 +869,7 @@ window.SOS = window.SOS || {};
       el = document.createElement('div');
       el.id = 'scHoverTip';
       el.className = 'satc-tip';
+      el.dataset.ajDone = '1';
       document.body.appendChild(el);
     }
     return el;
@@ -972,8 +976,9 @@ window.SOS = window.SOS || {};
     var edgeL = rootEl.querySelector('.satc-edge-btn.l');
     var edgeR = rootEl.querySelector('.satc-edge-btn.r');
 
+    var isCompact = window.innerWidth <= 980;
     var state = {
-      leftOpen: window.innerWidth > 768,
+      leftOpen: !isCompact,
       rightOpen: window.innerWidth > 1024,
       bottomOpen: false,
       bottomTab: 'attr',
@@ -1006,8 +1011,16 @@ window.SOS = window.SOS || {};
       setTimeout(onResize, 40);
     }
 
-    if (edgeL) edgeL.onclick = function () { state.leftOpen = !state.leftOpen; applyState(); };
-    if (edgeR) edgeR.onclick = function () { state.rightOpen = !state.rightOpen; applyState(); };
+    if (edgeL) edgeL.onclick = function () {
+      state.leftOpen = !state.leftOpen;
+      if (window.innerWidth <= 980 && state.leftOpen) state.rightOpen = false;
+      applyState();
+    };
+    if (edgeR) edgeR.onclick = function () {
+      state.rightOpen = !state.rightOpen;
+      if (window.innerWidth <= 980 && state.rightOpen) state.leftOpen = false;
+      applyState();
+    };
 
     // Interactive Before/After Swipe Dragging (Mouse + Touch)
     if (swipeEl) {
@@ -1036,12 +1049,12 @@ window.SOS = window.SOS || {};
       state: state,
       toggleLeft: function (force) {
         state.leftOpen = typeof force === 'boolean' ? force : !state.leftOpen;
-        if (window.innerWidth <= 768 && state.leftOpen) state.rightOpen = false;
+        if (window.innerWidth <= 980 && state.leftOpen) state.rightOpen = false;
         applyState();
       },
       toggleRight: function (force) {
         state.rightOpen = typeof force === 'boolean' ? force : !state.rightOpen;
-        if (window.innerWidth <= 768 && state.rightOpen) state.leftOpen = false;
+        if (window.innerWidth <= 980 && state.rightOpen) state.leftOpen = false;
         applyState();
       },
       toggleBottom: function (tabName) {
