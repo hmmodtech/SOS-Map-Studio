@@ -11,9 +11,7 @@ window.SOS = window.SOS || {};
   var MAX_UNDO = 40;
   var D = Math.PI / 180;
 
-  function uid(p) {
-    return (p || 'id') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  }
+  function uid(p) { return (p || 'id') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
@@ -63,11 +61,8 @@ window.SOS = window.SOS || {};
     };
   }
 
-  function blankBins() {
-    return { base: null, cleanup: null, assets: {} };
-  }
+  function blankBins() { return { base: null, cleanup: null, assets: {} }; }
 
-  // Isolated internal state
   var doc = blankDoc();
   var bins = blankBins();
   var imgs = { base: null, cleanup: null, assets: {} };
@@ -76,48 +71,32 @@ window.SOS = window.SOS || {};
   var idbQueue = Promise.resolve();
   var idbStatus = 'Ready';
 
-  // Offscreen cache for Layer 02_Ground_Cleanup
-  var cleanupCacheCv = null;
-  var cleanupCacheScale = 1;
-  var cleanupDirty = true;
-  var patchScratchCv = null;
-
-  // Viewport, UI Controllers & Runtime Tool State
+  var cleanupCacheCv = null, cleanupCacheScale = 1, cleanupDirty = true, patchScratchCv = null;
   var ov = null, cv = null, ctx = null, built = false, isOpen = false;
   var W = 1, H = 1, dpr = 1;
   var view = { s: 1, ox: 0, oy: 0 };
   var menuCtrl = null, railCtrl = null, wsCtrl = null;
   var tool = 'select';
-  var selAssetId = null;
-  var selPinId = null;
-  var selGisIds = [];
-  var pinCat = 'bldg';
-  var ptrs = {}, drag = null, space = false;
-  var hovImg = null;
-  var snapPreview = null;
-  var calibDraft = { p1: null, p2: null };
-  var bearingDraft = { p1: null, p2: null };
-  var measPts = [];
-  var cutPts = [];
-  var gisDraftPts = [];
-  var gtDraftPts = [];
+  var selAssetId = null, selPinId = null, selGisIds = [], pinCat = 'bldg';
+  var ptrs = {}, drag = null, space = false, hovImg = null, snapPreview = null;
+  var calibDraft = { p1: null, p2: null }, bearingDraft = { p1: null, p2: null };
+  var measPts = [], cutPts = [], gisDraftPts = [], gtDraftPts = [];
   var cutFeatherPx = 2;
   var cloneCfg = { src: null, pickMode: false, radius: 28, feather: 0.65, opacity: 1.0, rotDeg: 0, followDrag: true };
   var eraseCfg = { radius: 28, feather: 0.65, opacity: 1.0 };
   var photoCfg = { color: '#c5a267', radius: 18, hardness: 0.5, opacity: 0.75, tolerance: 28, contiguous: true };
   var attrFilter = { text: '', cat: 'ALL' };
-  var statusMsg = 'Import a full-resolution satellite image (File -> Import Base) to begin.';
+  var statusMsg = 'Import Base Satellite or GeoTerra JSON/ZIP (File menu) to begin.';
+  var georefModel = null, gpsEngine = null, compassEngine = null;
+  var liveGpsFix = null, liveCompassDeg = null, gpsStatusTxt = 'OFF';
+  var viewshedResult = null, rangeRingsState = null, evacMatrixLinks = [];
+  var driftFixPending = false, bottomTabMode = 'attr';
 
-  // Spatial Analysis & Georef/GPS/Compass Live Runtime
-  var georefModel = null;
-  var gpsEngine = null;
-  var compassEngine = null;
-  var liveGpsFix = null;
-  var liveCompassDeg = null;
-  var gpsStatusTxt = 'OFF';
-  var viewshedResult = null;
-  var rangeRingsState = null;
-  var evacMatrixLinks = [];
+  function getBaseDims() {
+    if (imgs.base && imgs.base.naturalWidth) return { w: imgs.base.naturalWidth, h: imgs.base.naturalHeight };
+    if (doc.base.width > 0 && doc.base.height > 0) return { w: doc.base.width, h: doc.base.height };
+    return { w: 0, h: 0 };
+  }
 
   // =========================================================================
   // 1. SERIALIZED INDEXEDDB STORAGE
@@ -164,9 +143,8 @@ window.SOS = window.SOS || {};
           } catch (e) { db.close(); rej(e); }
         });
       });
-    }).catch(function (err) {
+    }).catch(function () {
       if (snapGen === opGen) setIdbBadge('Unavailable');
-      console.warn('SatComposer IDB save warning:', err);
     });
     return idbQueue;
   }
@@ -305,8 +283,7 @@ window.SOS = window.SOS || {};
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
     recomputeGeoref(false);
     cleanupDirty = true;
-    persistToIDB();
-    syncUI(); draw();
+    persistToIDB(); syncUI(); draw();
   }
 
   function doUndo() {
@@ -377,7 +354,7 @@ window.SOS = window.SOS || {};
   function getGisById(id) { var fs = (doc.gis && doc.gis.features) || []; for (var i = 0; i < fs.length; i++) if (fs[i].id === id) return fs[i]; return null; }
 
   // =========================================================================
-  // 3. GEOREFERENCING, LIVE GPS & COMPASS BRIDGE (S.SatGeorefGPS)
+  // 3. GEOREFERENCING, LIVE GPS & COMPASS BRIDGE
   // =========================================================================
   function recomputeGeoref(syncScaleAndNorth) {
     if (!S.SatGeorefGPS || !doc.geoterra) { georefModel = null; return null; }
@@ -399,7 +376,7 @@ window.SOS = window.SOS || {};
       gpsEngine = S.SatGeorefGPS.createGpsEngine({
         onFix: function (fix) {
           liveGpsFix = fix;
-          gpsStatusTxt = '±' + Math.round(fix.accuracy) + 'm' + (fix.driftApplied ? ' [DRIFT OK]' : '') + (fix.degraded ? ' [WEAK]' : '');
+          gpsStatusTxt = '±' + Math.round(fix.accuracy) + 'm' + (fix.driftApplied ? ' [DRIFT]' : '') + (fix.degraded ? ' [WEAK]' : '');
           updateLiveHudChips();
           if (isOpen) draw();
         },
@@ -413,11 +390,7 @@ window.SOS = window.SOS || {};
     }
     if (!compassEngine) {
       compassEngine = S.SatGeorefGPS.createCompassEngine(
-        function (deg) {
-          liveCompassDeg = deg;
-          updateLiveHudChips();
-          if (isOpen) draw();
-        },
+        function (deg) { liveCompassDeg = deg; updateLiveHudChips(); if (isOpen) draw(); },
         function (state, msg) {
           if (state === 'off') liveCompassDeg = null;
           if (msg && state !== 'active') setStatus('Compass: ' + msg, state !== 'off');
@@ -448,55 +421,45 @@ window.SOS = window.SOS || {};
     ensureGpsCompassEngines();
     if (!gpsEngine) return;
     if (gpsEngine.isActive()) {
-      gpsEngine.stop();
-      liveGpsFix = null;
-      gpsStatusTxt = 'OFF';
-      setStatus('Live GPS tracking stopped.', false);
+      gpsEngine.stop(); liveGpsFix = null; gpsStatusTxt = 'OFF';
+      setStatus('Live GPS stopped.', false);
     } else {
       var diag = gpsEngine.diagnoseEnvironment();
       if (!diag.ready) {
-        alert('GPS Diagnostics:\n- ' + diag.issues.join('\n- ') + '\n\nTip: Run via localhost/HTTPS, or paste coordinates / import GPX/KML.');
+        alert('GPS Diagnostics:\n- ' + diag.issues.join('\n- ') + '\n\nTip: Use HTTPS / localhost, or paste coordinates / import GPX/KML.');
         setStatus('GPS blocked: ' + diag.issues[0], true);
         return;
       }
       gpsStatusTxt = 'SEARCHING...';
       gpsEngine.start();
-      setStatus('Live GPS started (Kalman smoothed + accuracy gate active).', false);
+      setStatus('Live GPS started (Kalman smoothed + accuracy gate).', false);
     }
-    updateLiveHudChips();
-    syncUI(); draw();
+    updateLiveHudChips(); syncUI(); draw();
   }
 
   function toggleLiveCompass() {
     ensureGpsCompassEngines();
     if (!compassEngine) return;
-    if (compassEngine.isActive()) {
-      compassEngine.stop();
-      setStatus('Live Compass stopped.', false);
-    } else {
-      compassEngine.start();
-      setStatus('Live Compass requested...', false);
-    }
+    if (compassEngine.isActive()) { compassEngine.stop(); setStatus('Live Compass stopped.', false); }
+    else { compassEngine.start(); setStatus('Live Compass requested...', false); }
     updateLiveHudChips();
   }
 
   function triggerDriftFixAtClick(imgPt) {
     ensureGpsCompassEngines();
     if (!georefModel || !georefModel.xyToLatLon) { setStatus('Georeference map with ≥ 2 GCPs before GPS Drift Fix.', true); return; }
-    if (!gpsEngine || !gpsEngine.getCurrentFix()) { setStatus('Turn on Live GPS and wait for a fix before setting Drift Offset.', true); return; }
+    if (!gpsEngine || !gpsEngine.getCurrentFix()) { setStatus('Turn on Live GPS and wait for a fix first.', true); return; }
     var ll = georefModel.xyToLatLon(imgPt.x, imgPt.y);
     if (!ll) return;
     var res = gpsEngine.setDriftCalibration(ll.lat, ll.lon, 'Map Anchor');
-    if (res) {
-      setStatus('GPS Drift Offset calibrated (shifted ' + res.shiftMeters + ' m to match your standing location).', false);
-      draw();
-    }
+    if (res) { setStatus('GPS Drift Offset calibrated (shifted ' + res.shiftMeters + ' m).', false); draw(); }
   }
 
   function dropGpsPointNow() {
     ensureGpsCompassEngines();
-    if (!imgs.base) { setStatus('Import Base Satellite image first.', true); return; }
-    if (!georefModel) { setStatus('Link at least 2 GCPs (GCP Georef tool) before dropping GPS points.', true); return; }
+    var dims = getBaseDims();
+    if (!dims.w) { setStatus('Import Base Satellite image first.', true); return; }
+    if (!georefModel) { setStatus('Link at least 2 GCPs before dropping GPS points.', true); return; }
     var fix = gpsEngine && gpsEngine.getCurrentFix();
     if (!fix) {
       setStatus('Capturing averaged GPS fix...', false);
@@ -512,44 +475,30 @@ window.SOS = window.SOS || {};
   }
 
   function insertGeorefPoint(lat, lon, accM) {
+    var dims = getBaseDims();
     var xy = georefModel.latLonToXY(lat, lon);
     if (!xy) { setStatus('Could not project Lat/Lon onto image.', true); return; }
-    var outOfBounds = xy.x < -40 || xy.y < -40 || xy.x > imgs.base.naturalWidth + 40 || xy.y > imgs.base.naturalHeight + 40;
-    if (outOfBounds) {
-      if (!confirm('GPS point projects outside image bounds (' + Math.round(xy.x) + ', ' + Math.round(xy.y) + '). Clamp to image edge?')) return;
-    }
-    var pt = { x: +clamp(xy.x, 0, imgs.base.naturalWidth).toFixed(2), y: +clamp(xy.y, 0, imgs.base.naturalHeight).toFixed(2) };
-
+    var pt = { x: +clamp(xy.x, 0, dims.w).toFixed(2), y: +clamp(xy.y, 0, dims.h).toFixed(2) };
     if (tool === 'gt_boundary') {
-      pushUndo('GPS Boundary Pt');
-      doc.geoterra.boundaryClosed = false;
-      doc.geoterra.boundary.push(pt);
+      pushUndo('GPS Boundary Pt'); doc.geoterra.boundaryClosed = false; doc.geoterra.boundary.push(pt);
     } else if (tool === 'gt_survey') {
-      if (doc.geoterra.surveyGeom === 'point') {
-        openGeoTerraModalFor([pt], 'point', -1);
-      } else {
-        gtDraftPts.push(pt);
-      }
+      if (doc.geoterra.surveyGeom === 'point') openGeoTerraModalFor([pt], 'point', -1);
+      else gtDraftPts.push(pt);
     } else if (tool === 'gis_line' || tool === 'poly_draw') {
       gisDraftPts.push(pt);
     } else {
       pushUndo('GPS GIS Point');
       var f = S.SatArcGIS.createFeature({ geom: 'point', category: doc.gis.activeCategory, name: 'GPS Point', points: [pt], notes: 'GPS ±' + Math.round(accM || 0) + 'm' });
-      doc.gis.features.push(f);
-      selGisIds = [f.id];
+      doc.gis.features.push(f); selGisIds = [f.id];
     }
-    panToImgPt(pt.x, pt.y);
-    persistToIDB(); syncUI(); draw();
-    setStatus('Dropped GPS point at ' + lat.toFixed(6) + ', ' + lon.toFixed(6) + (accM ? (' (±' + Math.round(accM) + 'm)') : ''), false);
+    panToImgPt(pt.x, pt.y); persistToIDB(); syncUI(); draw();
+    setStatus('Dropped GPS point at ' + lat.toFixed(6) + ', ' + lon.toFixed(6), false);
   }
 
-  function panToImgPt(ix, iy) {
-    view.ox = W / 2 - ix * view.s;
-    view.oy = H / 2 - iy * view.s;
-  }
+  function panToImgPt(ix, iy) { view.ox = W / 2 - ix * view.s; view.oy = H / 2 - iy * view.s; }
 
   // =========================================================================
-  // 4. IMPORTS: BASE, CLEANUP, PNG ASSETS, GIS FILES, GEOTERRA JSON
+  // 4. IMPORTS: BASE, CLEANUP, PNG ASSETS, GIS FILES, GEOTERRA JSON & ZIP
   // =========================================================================
   function importBaseFile(file) {
     if (!file) return;
@@ -559,20 +508,15 @@ window.SOS = window.SOS || {};
     reader.onload = function () {
       var dataUrl = reader.result;
       decodeImage(dataUrl, function (err, im) {
-        if (err || !im || !im.naturalWidth) { setStatus('Unsupported or corrupted image file.', true); return; }
+        if (err || !im || !im.naturalWidth) { alert('ملف الصورة غير مدعوم أو تالف.'); return; }
         var nw = im.naturalWidth, nh = im.naturalHeight;
-        opGen++;
-        pushUndo('Import Base Satellite');
-        bins.base = dataUrl;
-        imgs.base = im;
-        doc.base = {
-          id: uid('base'), name: file.name, mime: file.type || 'image/png',
-          width: nw, height: nh, byteSize: file.size || Math.round(dataUrl.length * 0.75)
-        };
+        opGen++; pushUndo('Import Base Satellite');
+        bins.base = dataUrl; imgs.base = im;
+        doc.base = { id: uid('base'), name: file.name, mime: file.type || 'image/png', width: nw, height: nh, byteSize: file.size || Math.round(dataUrl.length * 0.75) };
         calibDraft = { p1: null, p2: null };
         measPts = []; cutPts = []; gisDraftPts = []; gtDraftPts = [];
         cloneCfg.src = null; cleanupDirty = true;
-        setStatus('Loaded 01_Base_Satellite: ' + nw + 'x' + nh + ' px (Zero-Compression).', false);
+        setStatus('Loaded 01_Base_Satellite: ' + nw + 'x' + nh + ' px.', false);
         persistToIDB(); fitView(); syncUI(); draw();
       });
     };
@@ -580,18 +524,17 @@ window.SOS = window.SOS || {};
   }
 
   function importCleanupFile(file) {
-    if (!file || !imgs.base) { setStatus('Import Base Satellite first.', true); return; }
+    if (!file || !imgs.base) { alert('حمّل صورة خريطة الأساس أولاً.'); return; }
     var reader = new FileReader();
     reader.onload = function () {
       var dataUrl = reader.result;
       decodeImage(dataUrl, function (err, im) {
-        if (err || !im) { setStatus('Invalid cleanup image.', true); return; }
+        if (err || !im) { alert('صورة تنظيف غير صالحة.'); return; }
         pushUndo('Load Pre-Cleaned Layer');
         bins.cleanup = dataUrl; imgs.cleanup = im;
         doc.cleanupImage = { id: uid('cln'), name: file.name, width: im.naturalWidth, height: im.naturalHeight };
         doc.layers.cleanup.visible = true; cleanupDirty = true;
         persistToIDB(); syncUI(); draw();
-        setStatus('Loaded 02_Ground_Cleanup: ' + file.name, false);
       });
     };
     reader.readAsDataURL(file);
@@ -599,9 +542,8 @@ window.SOS = window.SOS || {};
 
   function importAssetFiles(fileList) {
     if (!fileList || !fileList.length) return;
-    if (!imgs.base) { setStatus('Import 01_Base_Satellite first.', true); return; }
-    var files = [].slice.call(fileList);
-    var doneCount = 0, addedCount = 0;
+    if (!imgs.base) { alert('حمّل صورة خريطة الأساس أولاً قبل إضافة العناصر.'); return; }
+    var files = [].slice.call(fileList), doneCount = 0, addedCount = 0;
     pushUndo('Import PNG Asset');
     files.forEach(function (file, idx) {
       var reader = new FileReader();
@@ -610,8 +552,7 @@ window.SOS = window.SOS || {};
         var dataUrl = reader.result;
         decodeImage(dataUrl, function (err, im) {
           if (!err && im && im.naturalWidth) {
-            var binId = uid('abin');
-            bins.assets[binId] = dataUrl; imgs.assets[binId] = im;
+            var binId = uid('abin'); bins.assets[binId] = dataUrl; imgs.assets[binId] = im;
             var ctr = s2i(W / 2, H / 2);
             ctr.x = clamp(ctr.x, 0, imgs.base.naturalWidth) + idx * 18;
             ctr.y = clamp(ctr.y, 0, imgs.base.naturalHeight) + idx * 18;
@@ -624,10 +565,7 @@ window.SOS = window.SOS || {};
               source: 'png', naturalW: im.naturalWidth, naturalH: im.naturalHeight,
               x: +ctr.x.toFixed(2), y: +ctr.y.toFixed(2), wPx: +wPx.toFixed(2), hPx: +(wPx / asp).toFixed(2)
             });
-            doc.assets.push(ast);
-            doc.layers.assets.visible = true;
-            selAssetId = ast.id;
-            addedCount++;
+            doc.assets.push(ast); doc.layers.assets.visible = true; selAssetId = ast.id; addedCount++;
           }
           doneCount++; checkDone();
         });
@@ -636,10 +574,7 @@ window.SOS = window.SOS || {};
     });
     function checkDone() {
       if (doneCount === files.length) {
-        if (addedCount > 0) {
-          persistToIDB(); setTool('select');
-          setStatus('Added ' + addedCount + ' asset(s). Use Crop Asset (C), Lasso Erase (L), or Magic Wand (W) to trim.', false);
-        }
+        if (addedCount > 0) { persistToIDB(); setTool('select'); setStatus('Added ' + addedCount + ' asset(s).', false); }
         syncUI(); draw();
       }
     }
@@ -650,32 +585,149 @@ window.SOS = window.SOS || {};
     var r = new FileReader();
     r.onload = function () {
       try {
-        var added = S.SatArcGIS.importGISFileText(file.name, r.result, georefModel);
-        if (!added.length) { setStatus('No GIS features found in ' + file.name, true); return; }
+        var added = S.SatArcGIS.importGISFileText(file.name, String(r.result || ''), georefModel);
+        if (!added.length) { alert('لم يتم العثور على معالم جغرافية في: ' + file.name); return; }
         pushUndo('Import GIS: ' + file.name);
         added.forEach(function (f) { doc.gis.features.push(f); });
         doc.layers.gis.visible = true;
         persistToIDB(); syncUI(); draw();
         setStatus('Imported ' + added.length + ' GIS feature(s) from ' + file.name, false);
-      } catch (e) { setStatus('GIS import failed: ' + e.message, true); }
+      } catch (e) { alert('فشل استيراد الملف الجغرافي:\n' + e.message); }
     };
     r.readAsText(file);
   }
 
+  function u8ToBase64(u8) {
+    var bin = '', chunk = 4096;
+    for (var i = 0; i < u8.length; i += chunk) {
+      var end = Math.min(u8.length, i + chunk), sub = '';
+      for (var j = i; j < end; j++) sub += String.fromCharCode(u8[j]);
+      bin += sub;
+    }
+    return btoa(bin);
+  }
+
+  function extractGeoTerraFromZip(buf) {
+    var dv = new DataView(buf), u8 = new Uint8Array(buf), off = 0, dec = new TextDecoder('utf-8');
+    var jsonText = null, photoMap = {}, mapPngUrl = null;
+    while (off + 30 <= u8.length) {
+      if (dv.getUint32(off, true) !== 0x04034b50) break;
+      var compMethod = dv.getUint16(off + 8, true);
+      var compSize = dv.getUint32(off + 18, true);
+      var nLen = dv.getUint16(off + 26, true);
+      var eLen = dv.getUint16(off + 28, true);
+      var name = dec.decode(u8.subarray(off + 30, off + 30 + nLen));
+      var dStart = off + 30 + nLen + eLen;
+      if (dStart + compSize > u8.length) break;
+      if (compMethod === 0 && compSize > 0) {
+        var slice = u8.subarray(dStart, dStart + compSize);
+        if (/\.json$/i.test(name)) {
+          jsonText = dec.decode(slice);
+        } else if (/^photos\/.+\.(jpe?g|png|webp)$/i.test(name)) {
+          var mime = /\.png$/i.test(name) ? 'image/png' : /\.webp$/i.test(name) ? 'image/webp' : 'image/jpeg';
+          photoMap[name] = 'data:' + mime + ';base64,' + u8ToBase64(slice);
+        } else if (/marked_map_full\.png$/i.test(name)) {
+          mapPngUrl = 'data:image/png;base64,' + u8ToBase64(slice);
+        }
+      }
+      off = dStart + compSize;
+    }
+    if (!jsonText) return null;
+    var obj = JSON.parse(jsonText.replace(/^\uFEFF/, '').trim());
+    if (obj && Array.isArray(obj.features)) {
+      obj.features.forEach(function (f) {
+        if (Array.isArray(f.photos)) {
+          f.photos.forEach(function (ph) {
+            if (!ph.dataUrl && ph.file && photoMap[ph.file]) ph.dataUrl = photoMap[ph.file];
+          });
+        }
+      });
+    }
+    return { data: obj, mapPngUrl: mapPngUrl };
+  }
+
+  function applyParsedGeoTerraData(dataObj, optionalMapUrl) {
+    if (!S.SatGeoTerra) { alert('وحدة js/satGeoTerra.js غير محمّلة.'); return false; }
+    var parsed = S.SatGeoTerra.parseImportedSurveyJson(JSON.stringify(dataObj));
+    pushUndo('Import GeoTerra Session');
+    doc.geoterra = parsed.state;
+    if (parsed.metersPerPixel > 0) doc.calibration.pxPerMeter = +(1 / parsed.metersPerPixel).toFixed(5);
+    doc.layers.geoterra.visible = true;
+
+    // Ensure virtual canvas dimensions exist even before Base Satellite photo is loaded
+    if (!imgs.base) {
+      var wEst = (+dataObj.imageWidth) || 0, hEst = (+dataObj.imageHeight) || 0;
+      if (!(wEst > 0 && hEst > 0)) {
+        var maxX = 1000, maxY = 800;
+        (doc.geoterra.boundary || []).forEach(function (p) { if (p.x > maxX) maxX = p.x + 80; if (p.y > maxY) maxY = p.y + 80; });
+        (doc.geoterra.features || []).forEach(function (f) { (f.points || []).forEach(function (p) { if (p.x > maxX) maxX = p.x + 80; if (p.y > maxY) maxY = p.y + 80; }); });
+        wEst = Math.ceil(maxX); hEst = Math.ceil(maxY);
+      }
+      doc.base.width = wEst; doc.base.height = hEst;
+    }
+
+    recomputeGeoref(true);
+    persistToIDB();
+    if (isOpen) { fitView(); syncUI(); draw(); }
+
+    var msg = 'تم استيراد جلسة GeoTerra بنجاح (' + doc.geoterra.features.length + ' معلم | ' + doc.geoterra.gcps.length + ' GCP | ' + doc.geoterra.boundary.length + ' نقطة حدود).';
+    setStatus(msg, false);
+    if (wsCtrl) wsCtrl.toggleRight(true);
+    var gp = ov && ov.querySelector('#scGtPanel');
+    if (gp) gp.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    if (!imgs.base) {
+      if (optionalMapUrl && confirm(msg + '\n\nلم يتم تحميل خريطة الأساس بعد — هل تريد عرض صورة الخريطة المرفقة داخل الـ ZIP مؤقتاً كخلفية؟')) {
+        decodeImage(optionalMapUrl, function (err, im) {
+          if (!err && im) {
+            bins.base = optionalMapUrl; imgs.base = im;
+            doc.base.width = im.naturalWidth; doc.base.height = im.naturalHeight; doc.base.name = 'GeoTerra_ZIP_Map.png';
+            persistToIDB(); fitView(); syncUI(); draw();
+          }
+        });
+      } else {
+        alert(msg + '\n\nالمعالم والقطاعات ظاهرة الآن. يمكنك تحميل صورة القمر الصناعي الأصلية من (ملف ➔ استيراد خريطة الأساس) لتتطابق فوقها 100%.');
+      }
+    }
+    return true;
+  }
+
   function importGeoTerraJsonFile(file) {
-    if (!file || !S.SatGeoTerra) return;
+    if (!file) return;
+    if (!S.SatGeoTerra) { alert('وحدة js/satGeoTerra.js غير محمّلة. تأكد من تحديث الصفحة.'); return; }
+    if (/\.zip$/i.test(file.name)) {
+      var rz = new FileReader();
+      rz.onerror = function () { alert('فشل قراءة ملف ZIP.'); };
+      rz.onload = function () {
+        try {
+          var ext = extractGeoTerraFromZip(rz.result);
+          if (!ext || !ext.data) {
+            alert('تعذّر استخراج project_ai.json من هذا الـ ZIP (تأكد أنه ملف حزمة GeoTerra أو استخرج ملف .json منه).');
+            return;
+          }
+          applyParsedGeoTerraData(ext.data, ext.mapPngUrl);
+        } catch (e) { alert('فشل قراءة حزمة GeoTerra ZIP:\n' + e.message); }
+      };
+      rz.readAsArrayBuffer(file);
+      return;
+    }
+
     var r = new FileReader();
+    r.onerror = function () { alert('فشل قراءة الملف من الجوال.'); };
     r.onload = function () {
       try {
-        var parsed = S.SatGeoTerra.parseImportedSurveyJson(r.result);
-        pushUndo('Import GeoTerra JSON');
-        doc.geoterra = parsed.state;
-        if (parsed.metersPerPixel > 0) doc.calibration.pxPerMeter = +(1 / parsed.metersPerPixel).toFixed(5);
-        doc.layers.geoterra.visible = true;
-        recomputeGeoref(true);
-        persistToIDB(); syncUI(); draw();
-        setStatus('Imported GeoTerra survey (' + doc.geoterra.features.length + ' items, ' + doc.geoterra.gcps.length + ' GCPs).', false);
-      } catch (e) { setStatus('GeoTerra JSON import failed: ' + e.message, true); }
+        var cleanTxt = String(r.result || '').replace(/^\uFEFF/, '').trim();
+        var obj = JSON.parse(cleanTxt);
+        if (obj && obj.satStudio) {
+          importState(obj.satStudio);
+          alert('تم استيراد بيانات Sat Studio من ملف المشروع بنجاح.');
+          return;
+        }
+        applyParsedGeoTerraData(obj, null);
+      } catch (e) {
+        setStatus('GeoTerra JSON import failed: ' + e.message, true);
+        alert('فشل استيراد ملف GeoTerra JSON:\n' + e.message);
+      }
     };
     r.readAsText(file);
   }
@@ -732,7 +784,7 @@ window.SOS = window.SOS || {};
   function applyMagicWandOnAsset(imgPt) {
     var a = getSelAsset();
     if (!a || !imgs.assets[a.binId] || !S.SatPhotoTools) {
-      setStatus('Select an asset first, then click the background color to remove.', true); return;
+      setStatus('Select an asset first, then click the background color.', true); return;
     }
     S.SatPhotoTools.magicWandRemoveColor(a, imgs.assets[a.binId], imgPt, photoCfg.tolerance, photoCfg.contiguous, function (err, url) {
       if (err || !url) { setStatus((err && err.message) || 'Magic Wand failed.', true); return; }
@@ -778,65 +830,45 @@ window.SOS = window.SOS || {};
       var sw = clamp(Math.round(ringR * 2), 16, imgs.base.naturalWidth - sx);
       var sh = clamp(Math.round(ringR * 2), 16, imgs.base.naturalHeight - sy);
       g.drawImage(imgs.base, sx, sy, sw, sh, 0, 0, 16, 16);
-      var d = g.getImageData(0, 0, 16, 16).data;
-      var rS = 0, gS = 0, bS = 0, cnt = 0;
+      var d = g.getImageData(0, 0, 16, 16).data, rS = 0, gS = 0, bS = 0, cnt = 0;
       for (var i = 0; i < d.length; i += 4) { rS += d[i]; gS += d[i + 1]; bS += d[i + 2]; cnt++; }
-      var lumBase = (0.299 * rS + 0.587 * gS + 0.114 * bS) / Math.max(1, cnt);
-      var warmBase = ((rS - bS) / Math.max(1, cnt));
-
-      g.clearRect(0, 0, 16, 16);
-      g.drawImage(imgs.assets[a.binId], 0, 0, 16, 16);
-      var d2 = g.getImageData(0, 0, 16, 16).data;
-      var r2 = 0, g2 = 0, b2 = 0, c2 = 0;
-      for (var j = 0; j < d2.length; j += 4) {
-        if (d2[j + 3] < 40) continue;
-        r2 += d2[j]; g2 += d2[j + 1]; b2 += d2[j + 2]; c2++;
-      }
-      c.width = 0; c.height = 0;
-      if (!c2) return;
-      var lumAst = (0.299 * r2 + 0.587 * g2 + 0.114 * b2) / c2;
-      var warmAst = (r2 - b2) / c2;
+      var lumBase = (0.299 * rS + 0.587 * gS + 0.114 * bS) / Math.max(1, cnt), warmBase = (rS - bS) / Math.max(1, cnt);
+      g.clearRect(0, 0, 16, 16); g.drawImage(imgs.assets[a.binId], 0, 0, 16, 16);
+      var d2 = g.getImageData(0, 0, 16, 16).data, r2 = 0, g2 = 0, b2 = 0, c2 = 0;
+      for (var j = 0; j < d2.length; j += 4) { if (d2[j + 3] < 40) continue; r2 += d2[j]; g2 += d2[j + 1]; b2 += d2[j + 2]; c2++; }
+      c.width = 0; c.height = 0; if (!c2) return;
+      var lumAst = (0.299 * r2 + 0.587 * g2 + 0.114 * b2) / c2, warmAst = (r2 - b2) / c2;
       pushUndo('Auto-Match Soil Tone');
       a.filters.brightness = Math.round(clamp((lumBase / Math.max(20, lumAst)) * 100, 65, 135));
       a.filters.warmth = Math.round(clamp((warmBase - warmAst) * 0.45, -35, 35));
       a.filters.saturation = Math.round(clamp(a.filters.saturation || 90, 75, 110));
       a.filters.blurPx = Math.max(a.filters.blurPx || 0, 0.4);
       persistToIDB(); syncUI(); draw();
-      setStatus('Auto-matched asset tone (Bright ' + a.filters.brightness + '%, Warmth ' + a.filters.warmth + ').', false);
+      setStatus('Auto-matched asset tone.', false);
     } catch (e) { setStatus('Auto-match error: ' + e.message, true); }
   }
 
   function stampPaintBrushDab(imgPt) {
     if (!imgs.base) return;
     doc.layers.cleanup.visible = true;
-    var r = Math.max(2, photoCfg.radius);
-    var cvBrush = document.createElement('canvas');
-    var d = Math.ceil(r * 2) + 4;
-    cvBrush.width = d; cvBrush.height = d;
-    var bg = cvBrush.getContext('2d');
-    var rIn = Math.max(0, r * clamp(photoCfg.hardness, 0, 0.95));
+    var r = Math.max(2, photoCfg.radius), d = Math.ceil(r * 2) + 4;
+    var cvBrush = document.createElement('canvas'); cvBrush.width = d; cvBrush.height = d;
+    var bg = cvBrush.getContext('2d'), rIn = Math.max(0, r * clamp(photoCfg.hardness, 0, 0.95));
     var grad = bg.createRadialGradient(d / 2, d / 2, rIn, d / 2, d / 2, r);
-    grad.addColorStop(0, photoCfg.color);
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    grad.addColorStop(0, photoCfg.color); grad.addColorStop(1, 'rgba(0,0,0,0)');
     bg.fillStyle = grad; bg.fillRect(0, 0, d, d);
-
     if (!cleanupCacheCv) {
-      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
-      var sc = Math.min(1, MAX_LIVE_CACHE_EDGE / Math.max(iw, ih));
+      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight, sc = Math.min(1, MAX_LIVE_CACHE_EDGE / Math.max(iw, ih));
       cleanupCacheCv = document.createElement('canvas');
-      cleanupCacheCv.width = Math.max(1, Math.round(iw * sc));
-      cleanupCacheCv.height = Math.max(1, Math.round(ih * sc));
+      cleanupCacheCv.width = Math.max(1, Math.round(iw * sc)); cleanupCacheCv.height = Math.max(1, Math.round(ih * sc));
       cleanupCacheScale = cleanupCacheCv.width / iw;
       cleanupCacheCv.getContext('2d').clearRect(0, 0, cleanupCacheCv.width, cleanupCacheCv.height);
       cleanupDirty = false;
     }
-    var cctx = cleanupCacheCv.getContext('2d');
-    cctx.save();
-    cctx.globalAlpha = clamp(photoCfg.opacity, 0.05, 1);
-    var dr = r * cleanupCacheScale;
+    var cctx = cleanupCacheCv.getContext('2d'), dr = r * cleanupCacheScale;
+    cctx.save(); cctx.globalAlpha = clamp(photoCfg.opacity, 0.05, 1);
     cctx.drawImage(cvBrush, imgPt.x * cleanupCacheScale - dr, imgPt.y * cleanupCacheScale - dr, dr * 2, dr * 2);
-    cctx.restore();
-    cvBrush.width = 0; cvBrush.height = 0;
+    cctx.restore(); cvBrush.width = 0; cvBrush.height = 0;
   }
 
   function extractCutoutFromBase() {
@@ -868,7 +900,6 @@ window.SOS = window.SOS || {};
       var ast = normalizeAsset({ id: uid('ast'), binId: binId, name: 'Cutout #' + cnt + ' (A➔B)', source: 'cutout', naturalW: bw, naturalH: bh, x: +(x0 + bw / 2).toFixed(2), y: +(y0 + bh / 2).toFixed(2), wPx: bw, hPx: bh });
       doc.assets.push(ast); doc.layers.assets.visible = true; selAssetId = ast.id; cutPts = [];
       persistToIDB(); setTool('select'); syncUI(); draw();
-      setStatus('Extracted 1:1 cutout (' + bw + 'x' + bh + ' px).', false);
     });
   }
 
@@ -895,23 +926,21 @@ window.SOS = window.SOS || {};
     var c = S.SatProcedural.polyCenter(q);
     var lenPx = Math.hypot(p2.x - p1.x, p2.y - p1.y), widPx = Math.max(16, lenPx * 0.60);
     var rotDeg = Math.atan2(p2.y - p1.y, p2.x - p1.x) / D;
-    var ppm = doc.calibration.pxPerMeter || 0;
     var url = S.SatProcedural.getCachedProceduralUrl('futsal|' + Math.round(lenPx) + 'x' + Math.round(widPx), function () {
       return S.SatProcedural.renderFutsalAssetCanvas({ wPx: lenPx, hPx: widPx });
     });
-    addProceduralAssetToScene('Futsal + Red Net', 'futsal', url, c.x, c.y, lenPx, widPx, rotDeg, ppm > 0 ? 3.0 : 3.0, true);
+    addProceduralAssetToScene('Futsal + Red Net', 'futsal', url, c.x, c.y, lenPx, widPx, rotDeg, 3.0, true);
   }
 
   function addBuildingAt(ip) {
     if (!S.SatProcedural || !imgs.base) return;
     var ppm = doc.calibration.pxPerMeter || 0;
     var wPx = ppm > 0 ? clamp(10 * ppm, 24, imgs.base.naturalWidth * 0.35) : clamp(imgs.base.naturalWidth * 0.08, 36, 180);
-    var hPx = wPx * 0.65;
-    var url = S.SatProcedural.getCachedProceduralUrl('bldg|' + Math.round(wPx) + 'x' + Math.round(hPx), function () {
-      return S.SatProcedural.renderBuildingAssetCanvas({ wPx: wPx, hPx: hPx });
+    var url = S.SatProcedural.getCachedProceduralUrl('bldg|' + Math.round(wPx) + 'x' + Math.round(wPx * 0.65), function () {
+      return S.SatProcedural.renderBuildingAssetCanvas({ wPx: wPx, hPx: wPx * 0.65 });
     });
     var idx = doc.assets.filter(function (a) { return a.source === 'bldg'; }).length + 1;
-    addProceduralAssetToScene('Building #' + idx, 'bldg', url, ip.x, ip.y, wPx, hPx, 0, 4.5, true);
+    addProceduralAssetToScene('Building #' + idx, 'bldg', url, ip.x, ip.y, wPx, wPx * 0.65, 0, 4.5, true);
   }
 
   function addTentAt(ip) {
@@ -1023,19 +1052,22 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 7. ASSET, PIN & GIS HIT-TESTING + VIEWPORT PROJECTION
+  // 7. VIEWPORT PROJECTION & HIT-TESTING
   // =========================================================================
   function i2s(ix, iy) { return [view.ox + ix * view.s, view.oy + iy * view.s]; }
   function s2i(sx, sy) { return { x: (sx - view.ox) / view.s, y: (sy - view.oy) / view.s }; }
-  function minScale() { return imgs.base ? Math.min(0.05, Math.min(W / imgs.base.naturalWidth, H / imgs.base.naturalHeight) * 0.25) : 0.1; }
+  function minScale() {
+    var d = getBaseDims();
+    return d.w ? Math.min(0.05, Math.min(W / d.w, H / d.h) * 0.25) : 0.1;
+  }
   function fitView() {
-    if (!imgs.base || !W || !H) { view.s = 1; view.ox = W / 2; view.oy = H / 2; return; }
-    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
-    view.s = Math.min(Math.max(40, W - 48) / iw, Math.max(40, H - 48) / ih);
-    view.ox = (W - iw * view.s) / 2; view.oy = (H - ih * view.s) / 2; draw();
+    var d = getBaseDims();
+    if (!d.w || !W || !H) { view.s = 1; view.ox = W / 2; view.oy = H / 2; return; }
+    view.s = Math.min(Math.max(40, W - 48) / d.w, Math.max(40, H - 48) / d.h);
+    view.ox = (W - d.w * view.s) / 2; view.oy = (H - d.h * view.s) / 2; draw();
   }
   function zoomNative100() {
-    if (!imgs.base) return;
+    var d = getBaseDims(); if (!d.w) return;
     var ctr = s2i(W / 2, H / 2); view.s = 1;
     view.ox = W / 2 - ctr.x; view.oy = H / 2 - ctr.y; draw();
   }
@@ -1106,31 +1138,22 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 8. MAIN 6-LAYER RENDERER + BEFORE/AFTER SWIPE + INTERACTIVE OVERLAYS
+  // 8. MAIN 6-LAYER RENDERER + SWIPE + INTERACTIVE OVERLAYS
   // =========================================================================
   function drawEditedLayers(iw, ih, tl, dw, dh) {
-    // LAYER 02: Ground Cleanup
-    if (doc.layers.cleanup.visible) {
+    if (doc.layers.cleanup.visible && imgs.base) {
       var ccv = ensureCleanupCache();
       if (ccv) {
-        ctx.save();
-        ctx.globalAlpha = clamp(doc.layers.cleanup.opacity, 0, 1);
-        ctx.imageSmoothingEnabled = view.s < 2;
-        ctx.drawImage(ccv, tl[0], tl[1], dw, dh);
-        ctx.restore();
+        ctx.save(); ctx.globalAlpha = clamp(doc.layers.cleanup.opacity, 0, 1);
+        ctx.imageSmoothingEnabled = view.s < 2; ctx.drawImage(ccv, tl[0], tl[1], dw, dh); ctx.restore();
       }
     }
-    // LAYER 03: Movable Assets + Global Sun Shadow
-    if (doc.layers.assets.visible) {
-      var layOp = clamp(doc.layers.assets.opacity, 0, 1);
-      if (S.SatBlending && S.SatBlending.renderLayer03) {
-        S.SatBlending.renderLayer03(ctx, {
-          assets: doc.assets, imgs: imgs.assets, sun: doc.sun, pxPerMeter: doc.calibration.pxPerMeter,
-          layerOpacity: layOp, scale: view.s, ox: view.ox, oy: view.oy, viewW: W, viewH: H, forExport: false
-        });
-      }
+    if (doc.layers.assets.visible && S.SatBlending && S.SatBlending.renderLayer03) {
+      S.SatBlending.renderLayer03(ctx, {
+        assets: doc.assets, imgs: imgs.assets, sun: doc.sun, pxPerMeter: doc.calibration.pxPerMeter,
+        layerOpacity: clamp(doc.layers.assets.opacity, 0, 1), scale: view.s, ox: view.ox, oy: view.oy, viewW: W, viewH: H, forExport: false
+      });
     }
-    // LAYER 05: ArcGIS Vectors, Buffers, Heatmap, Viewshed, Range Rings, Graticule
     if (doc.layers.gis.visible && S.SatArcGIS) {
       S.SatArcGIS.renderGisLayer(ctx, {
         features: doc.gis.features, i2s: i2s, pxPerMeter: doc.calibration.pxPerMeter,
@@ -1141,7 +1164,6 @@ window.SOS = window.SOS || {};
         imgW: iw, imgH: ih, viewS: view.s
       });
     }
-    // LAYER 06: GeoTerra Field Survey (Boundary, Sectors A1..F4, REM/REP/MOD/ADD, GCPs, Live GPS)
     if (doc.layers.geoterra.visible && S.SatGeoTerra) {
       S.SatGeoTerra.drawGeoTerraLayer(ctx, {
         state: doc.geoterra, imgW: iw, imgH: ih, viewS: view.s, ox: view.ox, oy: view.oy,
@@ -1151,7 +1173,6 @@ window.SOS = window.SOS || {};
         compassHeading: liveCompassDeg, forExport: false
       });
     }
-    // LAYER 04: Print Overlays Live Preview (Pins + North Arrow)
     if (doc.layers.overlays.visible && S.SatExport && S.SatExport.drawLiveOverlays) {
       S.SatExport.drawLiveOverlays(ctx, {
         overlays: doc.overlays, i2s: i2s, selPinId: selPinId,
@@ -1168,49 +1189,35 @@ window.SOS = window.SOS || {};
       ctx.fillStyle = isDay ? '#dfe7ef' : '#06090e';
       ctx.fillRect(0, 0, W, H);
 
-      if (!imgs.base) {
+      var dims = getBaseDims();
+      if (!dims.w || !dims.h) {
         ctx.fillStyle = isDay ? '#334155' : '#7c97b0';
-        ctx.font = 'bold 13px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('AJ-GeoCAD UNIFIED STUDIO — PHOTOSHOP + ArcGIS + GEOTERRA', W / 2, H / 2 - 12);
-        ctx.font = '11px ' + MONO;
-        ctx.fillText('File ➔ Import Base Satellite Image to begin (Zero-Compression + IndexedDB Auto-Save)', W / 2, H / 2 + 12);
+        ctx.font = 'bold 12px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('AJ-GeoCAD STUDIO — PHOTOSHOP + ArcGIS + GEOTERRA', W / 2, H / 2 - 12);
+        ctx.font = '10.5px ' + MONO;
+        ctx.fillText('ملف ➔ استيراد خريطة الأساس  |  أو استيراد جلسة GeoTerra (.json / .zip)', W / 2, H / 2 + 12);
         return;
       }
 
-      var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
-      var tl = i2s(0, 0), dw = iw * view.s, dh = ih * view.s;
-
-      // Checkerboard / canvas backdrop when Layer 01 Base is hidden
+      var iw = dims.w, ih = dims.h, tl = i2s(0, 0), dw = iw * view.s, dh = ih * view.s;
       ctx.fillStyle = isDay ? '#cbd5e1' : '#0c121b';
       ctx.fillRect(tl[0], tl[1], dw, dh);
 
-      // LAYER 01: Base Satellite (Independent Toggle Supported!)
-      if (doc.layers.base.visible) {
-        ctx.save();
-        ctx.globalAlpha = clamp(doc.layers.base.opacity, 0, 1);
-        ctx.imageSmoothingEnabled = view.s < 2;
-        ctx.drawImage(imgs.base, tl[0], tl[1], dw, dh);
-        ctx.restore();
+      if (doc.layers.base.visible && imgs.base) {
+        ctx.save(); ctx.globalAlpha = clamp(doc.layers.base.opacity, 0, 1);
+        ctx.imageSmoothingEnabled = view.s < 2; ctx.drawImage(imgs.base, tl[0], tl[1], dw, dh); ctx.restore();
       }
 
-      // Layers 02..06 (with optional Before/After Swipe clip!)
-      var swipeOn = wsCtrl && wsCtrl.state.swipeActive;
+      var swipeOn = wsCtrl && wsCtrl.state.swipeActive && imgs.base;
       if (swipeOn) {
         var cutX = wsCtrl.state.swipeRatio * W;
-        ctx.save();
-        ctx.beginPath(); ctx.rect(cutX, 0, W - cutX, H); ctx.clip();
-        drawEditedLayers(iw, ih, tl, dw, dh);
-        ctx.restore();
-        ctx.save();
-        ctx.font = 'bold 10px ' + MONO;
+        ctx.save(); ctx.beginPath(); ctx.rect(cutX, 0, W - cutX, H); ctx.clip();
+        drawEditedLayers(iw, ih, tl, dw, dh); ctx.restore();
+        ctx.save(); ctx.font = 'bold 10px ' + MONO;
         ctx.fillStyle = 'rgba(8,11,16,0.85)';
-        ctx.fillRect(Math.max(10, cutX - 74), 40, 64, 18);
-        ctx.fillRect(Math.min(W - 76, cutX + 10), 40, 66, 18);
-        ctx.fillStyle = '#e8c84a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('BEFORE', Math.max(42, cutX - 42), 49);
-        ctx.fillStyle = '#39ff14';
-        ctx.fillText('AFTER', Math.min(W - 43, cutX + 43), 49);
-        ctx.restore();
+        ctx.fillRect(Math.max(10, cutX - 74), 40, 64, 18); ctx.fillRect(Math.min(W - 76, cutX + 10), 40, 66, 18);
+        ctx.fillStyle = '#e8c84a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('BEFORE', Math.max(42, cutX - 42), 49);
+        ctx.fillStyle = '#39ff14'; ctx.fillText('AFTER', Math.min(W - 43, cutX + 43), 49); ctx.restore();
       } else {
         drawEditedLayers(iw, ih, tl, dw, dh);
       }
@@ -1219,10 +1226,7 @@ window.SOS = window.SOS || {};
       ctx.strokeRect(tl[0], tl[1], dw, dh);
 
       var sel = getSelAsset();
-      if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'wand')) {
-        drawAssetGizmo(sel);
-      }
-
+      if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'wand')) drawAssetGizmo(sel);
       if (tool === 'clone') drawCloneOverlay();
       if (tool === 'erase') drawEraserOverlay();
       if (tool === 'brush') drawBrushOverlay();
@@ -1232,14 +1236,12 @@ window.SOS = window.SOS || {};
       if (tool === 'crop_base' && drag && drag.m === 'crop_base') {
         var sA = i2s(drag.p1.x, drag.p1.y), sB = i2s(drag.p2.x, drag.p2.y);
         ctx.save(); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
-        ctx.strokeRect(Math.min(sA[0], sB[0]), Math.min(sA[1], sB[1]), Math.abs(sB[0] - sA[0]), Math.abs(sB[1] - sA[1]));
-        ctx.restore();
+        ctx.strokeRect(Math.min(sA[0], sB[0]), Math.min(sA[1], sB[1]), Math.abs(sB[0] - sA[0]), Math.abs(sB[1] - sA[1])); ctx.restore();
       }
       if (tool === 'gis_circle' && drag && drag.m === 'gis_circle') {
         var scC = i2s(drag.c.x, drag.c.y), rScr = Math.hypot(drag.edge.x - drag.c.x, drag.edge.y - drag.c.y) * view.s;
         ctx.save(); ctx.strokeStyle = '#39ff14'; ctx.fillStyle = 'rgba(57,255,20,0.16)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(scC[0], scC[1], rScr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.restore();
+        ctx.beginPath(); ctx.arc(scC[0], scC[1], rScr, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
       }
       if (tool === 'futsal_rect' && drag && drag.m === 'futsal_rect' && S.SatProcedural) {
         var q = S.SatProcedural.makeOrientedRect(drag.p1, drag.p2);
@@ -1258,15 +1260,12 @@ window.SOS = window.SOS || {};
 
       if (snapPreview && snapPreview.snapped) {
         var ssp = i2s(snapPreview.x, snapPreview.y);
-        ctx.save(); ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2;
-        ctx.strokeRect(ssp[0] - 6, ssp[1] - 6, 12, 12);
-        ctx.font = 'bold 9px ' + MONO; ctx.fillStyle = '#39ff14';
-        ctx.fillText(snapPreview.type, ssp[0] + 9, ssp[1] - 6);
-        ctx.restore();
+        ctx.save(); ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.strokeRect(ssp[0] - 6, ssp[1] - 6, 12, 12);
+        ctx.font = 'bold 9px ' + MONO; ctx.fillStyle = '#39ff14'; ctx.fillText(snapPreview.type, ssp[0] + 9, ssp[1] - 6); ctx.restore();
       }
 
       if (doc.showScaleBar && doc.calibration.pxPerMeter > 0) drawScaleBar(isDay);
-      drawViewportHud(isDay);
+      drawViewportHud(isDay, dims);
     } catch (err) {
       setStatus('Render warning: ' + err.message, true);
     }
@@ -1283,12 +1282,8 @@ window.SOS = window.SOS || {};
     if (!a.locked) {
       ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.moveTo(topM[0], topM[1]); ctx.lineTo(rotP[0], rotP[1]); ctx.stroke();
-      ctx.beginPath(); ctx.arc(rotP[0], rotP[1], 6, 0, Math.PI * 2);
-      ctx.fillStyle = '#06090e'; ctx.fill(); ctx.stroke();
-      pts.forEach(function (p) {
-        ctx.fillStyle = '#06090e'; ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2;
-        ctx.fillRect(p[0] - 5, p[1] - 5, 10, 10); ctx.strokeRect(p[0] - 5, p[1] - 5, 10, 10);
-      });
+      ctx.beginPath(); ctx.arc(rotP[0], rotP[1], 6, 0, Math.PI * 2); ctx.fillStyle = '#06090e'; ctx.fill(); ctx.stroke();
+      pts.forEach(function (p) { ctx.fillStyle = '#06090e'; ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2; ctx.fillRect(p[0] - 5, p[1] - 5, 10, 10); ctx.strokeRect(p[0] - 5, p[1] - 5, 10, 10); });
     }
     var dimTxt = a.name + (doc.calibration.pxPerMeter > 0 ? (' • ' + (a.wPx / doc.calibration.pxPerMeter).toFixed(1) + 'x' + (a.hPx / doc.calibration.pxPerMeter).toFixed(1) + 'm') : '') + ' • ' + Math.round(a.rotationDeg || 0) + '°';
     ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1319,16 +1314,14 @@ window.SOS = window.SOS || {};
     if (!hovImg) return;
     var hs = i2s(hovImg.x, hovImg.y);
     ctx.save(); ctx.strokeStyle = '#ff3c3c'; ctx.lineWidth = 1.8;
-    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, eraseCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke();
-    ctx.restore();
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, eraseCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke(); ctx.restore();
   }
 
   function drawBrushOverlay() {
     if (!hovImg) return;
     var hs = i2s(hovImg.x, hovImg.y);
     ctx.save(); ctx.strokeStyle = photoCfg.color || '#00e5ff'; ctx.lineWidth = 1.8;
-    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, photoCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke();
-    ctx.restore();
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], Math.max(4, photoCfg.radius * view.s), 0, Math.PI * 2); ctx.stroke(); ctx.restore();
   }
 
   function drawPolyOverlay(pts, col, isClosed) {
@@ -1341,8 +1334,7 @@ window.SOS = window.SOS || {};
       ctx.closePath(); ctx.fill();
     }
     ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath();
-    sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
-    ctx.stroke();
+    sp.forEach(function (p, i) { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); }); ctx.stroke();
     if (hovImg) {
       var last = sp[sp.length - 1], cur = i2s(hovImg.x, hovImg.y);
       ctx.strokeStyle = '#e8c84a'; ctx.setLineDash([6, 4]);
@@ -1350,8 +1342,7 @@ window.SOS = window.SOS || {};
     }
     sp.forEach(function (p, idx) {
       ctx.beginPath(); ctx.arc(p[0], p[1], idx === 0 && sp.length >= 3 ? 7 : 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = idx === 0 ? '#e8c84a' : col; ctx.fill();
-      ctx.strokeStyle = '#06090e'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = idx === 0 ? '#e8c84a' : col; ctx.fill(); ctx.strokeStyle = '#06090e'; ctx.lineWidth = 1.5; ctx.stroke();
     });
     ctx.restore();
   }
@@ -1359,8 +1350,7 @@ window.SOS = window.SOS || {};
   function drawGuideSegment(a, b, col, tag) {
     if (!a) return;
     var sa = i2s(a.x, a.y);
-    ctx.save();
-    ctx.fillStyle = col; ctx.strokeStyle = '#06090e'; ctx.lineWidth = 2;
+    ctx.save(); ctx.fillStyle = col; ctx.strokeStyle = '#06090e'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(sa[0], sa[1], 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     if (b) {
       var sb = i2s(b.x, b.y);
@@ -1397,22 +1387,22 @@ window.SOS = window.SOS || {};
     ctx.restore();
   }
 
-  function drawViewportHud(isDay) {
+  function drawViewportHud(isDay, dims) {
     var parts = ['TOOL: ' + tool.toUpperCase(), 'ZOOM ' + Math.round(view.s * 100) + '%'];
-    if (imgs.base) parts.push(imgs.base.naturalWidth + 'x' + imgs.base.naturalHeight + 'px');
+    if (!imgs.base) parts.push('NO BASE IMG (File->Import Base)');
+    else parts.push(dims.w + 'x' + dims.h + 'px');
     if (hovImg) {
       if (georefModel && S.SatGeorefGPS) {
         var ll = georefModel.xyToLatLon(hovImg.x, hovImg.y);
         if (ll) parts.push(S.SatGeorefGPS.formatCoords(ll.lat, ll.lon, doc.gis.coordSys));
       } else if (doc.calibration.pxPerMeter > 0) {
-        parts.push('M (' + (hovImg.x / doc.calibration.pxPerMeter).toFixed(1) + ', ' + (hovImg.y / doc.calibration.pxPerMeter).toFixed(1) + ')');
+        parts.push('M (' + (hovImg.x / doc.calibration.pxPerMeter).toFixed(1) + ',' + (hovImg.y / doc.calibration.pxPerMeter).toFixed(1) + ')');
       } else {
-        parts.push('PX (' + Math.round(hovImg.x) + ', ' + Math.round(hovImg.y) + ')');
+        parts.push('PX (' + Math.round(hovImg.x) + ',' + Math.round(hovImg.y) + ')');
       }
     }
     var txt = parts.join(' | ');
-    ctx.save();
-    ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.save(); ctx.font = 'bold 10px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     var tw = Math.min(W - 44, ctx.measureText(txt).width + 16);
     ctx.fillStyle = isDay ? 'rgba(255,255,255,0.92)' : 'rgba(8,11,16,0.9)';
     ctx.fillRect(22, 10, tw, 22);
@@ -1421,33 +1411,20 @@ window.SOS = window.SOS || {};
     ctx.restore();
   }
 
-  // END OF PART 1 / 2
   // =========================================================================
   // 9. CALIBRATION, GIS TOPOLOGY, GEOPROCESSING, GEOTERRA & 3D/CAD BRIDGE
   // =========================================================================
-  var driftFixPending = false;
-  var bottomTabMode = 'attr'; // 'attr' | 'gcp' | 'hist'
-
   function applyCalibration(knownMeters) {
     var m = parseFloat(knownMeters);
     if (!(m > 0)) { setStatus('Enter a valid positive distance in meters.', true); return; }
-    var p1 = calibDraft.p1 || doc.calibration.p1;
-    var p2 = calibDraft.p2 || doc.calibration.p2;
+    var p1 = calibDraft.p1 || doc.calibration.p1, p2 = calibDraft.p2 || doc.calibration.p2;
     if (!p1 || !p2) { setStatus('Pick 2 reference points on the image first.', true); return; }
     var pxDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     if (pxDist < 2) { setStatus('Reference points are too close.', true); return; }
     pushUndo('Calibrate Metric Scale');
-    doc.calibration = {
-      pxPerMeter: +(pxDist / m).toFixed(5),
-      p1: { x: +p1.x.toFixed(2), y: +p1.y.toFixed(2) },
-      p2: { x: +p2.x.toFixed(2), y: +p2.y.toFixed(2) },
-      knownMeters: m
-    };
-    recomputeGeoref(false);
-    persistToIDB();
-    setTool('select');
+    doc.calibration = { pxPerMeter: +(pxDist / m).toFixed(5), p1: { x: +p1.x.toFixed(2), y: +p1.y.toFixed(2) }, p2: { x: +p2.x.toFixed(2), y: +p2.y.toFixed(2) }, knownMeters: m };
+    recomputeGeoref(false); persistToIDB(); setTool('select'); syncUI(); draw();
     setStatus('Scale calibrated: ' + doc.calibration.pxPerMeter.toFixed(3) + ' px/m.', false);
-    syncUI(); draw();
   }
 
   function clearCalibration() {
@@ -1455,25 +1432,19 @@ window.SOS = window.SOS || {};
     doc.calibration = { pxPerMeter: 0, p1: null, p2: null, knownMeters: 10 };
     calibDraft = { p1: null, p2: null };
     persistToIDB(); syncUI(); draw();
-    setStatus('Scale calibration cleared.', false);
   }
 
   function finalizeBearingCalibration(p1, p2) {
     if (!S.SatArcGIS) return;
     var knownStr = prompt('Enter true bearing of this line in degrees (0 = True North, 90 = East):', '0');
     if (knownStr === null) { bearingDraft = { p1: null, p2: null }; draw(); return; }
-    var known = parseFloat(knownStr) || 0;
-    var off = S.SatArcGIS.calcNorthOffsetFromLine(p1, p2, known);
+    var off = S.SatArcGIS.calcNorthOffsetFromLine(p1, p2, parseFloat(knownStr) || 0);
     bearingDraft = { p1: null, p2: null };
     if (off === null) { setStatus('Bearing line too short.', true); draw(); return; }
-    pushUndo('Calibrate True North');
-    doc.overlays.northDeg = off;
-    if (St && St.project && St.project.meta) {
-      St.project.meta.trueNorthOffsetDeg = off;
-      St.emit('change');
-    }
+    pushUndo('Calibrate True North'); doc.overlays.northDeg = off;
+    if (St && St.project && St.project.meta) { St.project.meta.trueNorthOffsetDeg = off; St.emit('change'); }
     persistToIDB(); setTool('select'); syncUI(); draw();
-    setStatus('True North calibrated: ' + off + '° (synced with AJ-GeoCAD).', false);
+    setStatus('True North calibrated: ' + off + '°.', false);
   }
 
   function finalizeGisShape() {
@@ -1484,332 +1455,211 @@ window.SOS = window.SOS || {};
       if (!target || target.geom !== 'polygon') { setStatus('Select a GIS polygon to split first.', true); gisDraftPts = []; draw(); return; }
       var parts = S.SatArcGIS.splitPolygonByLine(target.points, gisDraftPts);
       gisDraftPts = [];
-      if (!parts) { setStatus('Cut line did not divide the polygon cleanly.', true); draw(); return; }
+      if (!parts) { setStatus('Cut line did not divide polygon.', true); draw(); return; }
       pushUndo('Split Polygon');
       doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== target.id; });
       var f1 = S.SatArcGIS.createFeature(Object.assign({}, target, { id: uid('gis'), name: target.name + ' (A)', points: parts[0] }));
       var f2 = S.SatArcGIS.createFeature(Object.assign({}, target, { id: uid('gis'), name: target.name + ' (B)', points: parts[1] }));
-      doc.gis.features.push(f1, f2);
-      selGisIds = [f1.id, f2.id];
-      persistToIDB(); setTool('select'); syncUI(); draw();
-      setStatus('Split polygon into two independent GIS features.', false);
-      return;
+      doc.gis.features.push(f1, f2); selGisIds = [f1.id, f2.id];
+      persistToIDB(); setTool('select'); syncUI(); draw(); return;
     }
-
     var minPts = tool === 'gis_line' ? 2 : 3;
     if (gisDraftPts.length < minPts) { setStatus('Click at least ' + minPts + ' points first.', true); return; }
     pushUndo(tool === 'gis_line' ? 'Draw GIS Line' : 'Draw GIS Polygon');
-    var cat = doc.gis.activeCategory || (tool === 'gis_line' ? 'evac_route' : 'building');
-    var feat = S.SatArcGIS.createFeature({
-      geom: tool === 'gis_line' ? 'polyline' : 'polygon',
-      category: cat,
-      points: gisDraftPts.slice()
-    });
-    doc.gis.features.push(feat);
-    doc.layers.gis.visible = true;
-    selGisIds = [feat.id];
-    gisDraftPts = [];
+    var feat = S.SatArcGIS.createFeature({ geom: tool === 'gis_line' ? 'polyline' : 'polygon', category: doc.gis.activeCategory || 'building', points: gisDraftPts.slice() });
+    doc.gis.features.push(feat); doc.layers.gis.visible = true; selGisIds = [feat.id]; gisDraftPts = [];
     persistToIDB(); syncUI(); draw();
-    var st = S.SatArcGIS.polyStats(feat.points, doc.calibration.pxPerMeter);
-    setStatus('Created ' + feat.name + (feat.geom === 'polygon' && st.areaM2 > 0 ? (' | ' + st.areaM2 + ' m² (' + st.dunum + ' dunum)') : (st.lengthM > 0 ? (' | ' + st.lengthM + ' m') : '')), false);
   }
 
   function runGisBooleanOp(op) {
     if (!S.SatArcGIS) return;
     var polys = selGisIds.map(getGisById).filter(function (f) { return f && f.geom === 'polygon' && f.points.length >= 3; });
-    if (polys.length < 2) {
-      setStatus('Select 2 GIS polygons (Ctrl+Click in Attribute Table or on map) to run ' + op.toUpperCase() + '.', true);
-      return;
-    }
+    if (polys.length < 2) { alert('Select 2 GIS polygons first (Ctrl+Click) to run ' + op.toUpperCase() + '.'); return; }
     var rings = S.SatArcGIS.polygonBoolean(polys[0].points, polys[1].points, op);
-    if (!rings.length) { setStatus('Polygons do not overlap or produced empty geometry.', true); return; }
+    if (!rings.length) { setStatus('No overlapping result.', true); return; }
     pushUndo('Topology ' + op);
-    if (op === 'union') {
-      doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== polys[0].id && f.id !== polys[1].id; });
-    } else if (op === 'difference') {
-      doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== polys[0].id; });
-    }
+    if (op === 'union') doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== polys[0].id && f.id !== polys[1].id; });
+    else if (op === 'difference') doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== polys[0].id; });
     var created = [];
     rings.forEach(function (r, i) {
-      var nf = S.SatArcGIS.createFeature({
-        geom: 'polygon', category: polys[0].category,
-        name: polys[0].name + ' [' + op + (rings.length > 1 ? (' ' + (i + 1)) : '') + ']',
-        points: r
-      });
-      doc.gis.features.push(nf);
-      created.push(nf.id);
+      var nf = S.SatArcGIS.createFeature({ geom: 'polygon', category: polys[0].category, name: polys[0].name + ' [' + op + (rings.length > 1 ? (' ' + (i + 1)) : '') + ']', points: r });
+      doc.gis.features.push(nf); created.push(nf.id);
     });
-    selGisIds = created;
-    persistToIDB(); syncUI(); draw();
-    setStatus('Topology ' + op.toUpperCase() + ' produced ' + created.length + ' polygon(s).', false);
+    selGisIds = created; persistToIDB(); syncUI(); draw();
   }
 
   function runBufferTool(centerPt) {
     if (!S.SatArcGIS) return;
-    if (!(doc.calibration.pxPerMeter > 0)) { setStatus('Calibrate metric scale (px/m) or GCPs first for metric buffers.', true); return; }
-    var target = selGisIds.length ? getGisById(selGisIds[0]) : null;
-    if (!target && centerPt) {
-      target = S.SatArcGIS.createFeature({ geom: 'point', category: 'generic', name: 'Buffer Center', points: [centerPt] });
-    }
-    if (!target) { setStatus('Select a GIS feature or click on the map to create a Buffer.', true); return; }
-    var raw = prompt('Enter buffer distance(s) in meters (comma-separated for Multi-Ring, e.g. 10, 25, 50):', '10, 25, 50');
+    if (!(doc.calibration.pxPerMeter > 0)) { alert('Calibrate metric scale (px/m) or GCPs first.'); return; }
+    var target = selGisIds.length ? getGisById(selGisIds[0]) : (centerPt ? S.SatArcGIS.createFeature({ geom: 'point', category: 'generic', name: 'Buffer Center', points: [centerPt] }) : null);
+    if (!target) { setStatus('Select a GIS feature or click on map.', true); return; }
+    var raw = prompt('Buffer distances in meters (e.g. 10, 25, 50):', '10, 25, 50');
     if (!raw) return;
     var dists = raw.split(/[,;\s]+/).map(parseFloat).filter(function (v) { return isFinite(v) && v > 0; });
-    if (!dists.length) return;
     var rings = S.SatArcGIS.createMultiRingBuffers(target, dists, doc.calibration.pxPerMeter);
     if (!rings.length) return;
-    pushUndo('Multi-Ring Buffer');
-    rings.forEach(function (r) { doc.gis.features.push(r); });
-    doc.layers.gis.visible = true;
-    persistToIDB(); syncUI(); draw();
-    setStatus('Generated ' + rings.length + ' buffer ring(s) (' + dists.join('m, ') + 'm).', false);
+    pushUndo('Multi-Ring Buffer'); rings.forEach(function (r) { doc.gis.features.push(r); });
+    doc.layers.gis.visible = true; persistToIDB(); syncUI(); draw();
   }
 
   function runViewshedAt(originPt) {
-    if (!S.SatArcGIS || !imgs.base) return;
+    if (!S.SatArcGIS) return;
     var ppm = doc.calibration.pxPerMeter || 0;
-    var raw = prompt('Viewshed radius in ' + (ppm > 0 ? 'meters' : 'pixels') + ':', ppm > 0 ? '60' : '250');
+    var raw = prompt('Viewshed radius (' + (ppm > 0 ? 'meters' : 'pixels') + '):', ppm > 0 ? '60' : '250');
     if (!raw) return;
     var radPx = ppm > 0 ? (parseFloat(raw) * ppm) : parseFloat(raw);
     if (!(radPx > 5)) return;
     var obstacles = (doc.gis.features || []).filter(function (f) { return f.visible && f.obstacle && f.geom === 'polygon' && f.points.length >= 3; }).map(function (f) { return f.points; });
     viewshedResult = S.SatArcGIS.computeViewshed2D(originPt, radPx, obstacles, 360);
-    doc.layers.gis.visible = true;
-    draw();
-    setStatus('2D Viewshed calculated: ' + viewshedResult.coveragePct + '% visible coverage (' + obstacles.length + ' building obstacles).', false);
+    doc.layers.gis.visible = true; draw();
+    setStatus('2D Viewshed: ' + viewshedResult.coveragePct + '% visible coverage.', false);
   }
 
   function runRangeRingsDialog() {
-    if (!imgs.base) return;
-    if (!(doc.calibration.pxPerMeter > 0)) { setStatus('Calibrate metric scale first for Range Rings.', true); return; }
-    var raw = prompt('Enter Range Ring distances in meters (empty to clear):', '15, 30, 60, 100');
+    var d = getBaseDims(); if (!d.w) return;
+    if (!(doc.calibration.pxPerMeter > 0)) { alert('Calibrate metric scale first.'); return; }
+    var raw = prompt('Range Rings in meters (empty to clear):', '15, 30, 60, 100');
     if (raw === null) return;
-    if (!raw.trim()) { rangeRingsState = null; draw(); setStatus('Range Rings cleared.', false); return; }
+    if (!raw.trim()) { rangeRingsState = null; draw(); return; }
     var rings = raw.split(/[,;\s]+/).map(parseFloat).filter(function (v) { return isFinite(v) && v > 0; });
-    var ctr = hovImg || { x: imgs.base.naturalWidth / 2, y: imgs.base.naturalHeight / 2 };
-    if (selGisIds.length) {
-      var sf = getGisById(selGisIds[0]);
-      if (sf && S.SatArcGIS) { var st = S.SatArcGIS.polyStats(sf.points, doc.calibration.pxPerMeter); ctr = { x: st.cx, y: st.cy }; }
-    }
-    rangeRingsState = { center: ctr, ringsM: rings };
-    doc.layers.gis.visible = true;
-    draw();
-    setStatus('Range Rings active (' + rings.join('m, ') + 'm).', false);
+    var ctr = hovImg || { x: d.w / 2, y: d.h / 2 };
+    if (selGisIds.length) { var sf = getGisById(selGisIds[0]); if (sf && S.SatArcGIS) { var st = S.SatArcGIS.polyStats(sf.points, doc.calibration.pxPerMeter); ctr = { x: st.cx, y: st.cy }; } }
+    rangeRingsState = { center: ctr, ringsM: rings }; doc.layers.gis.visible = true; draw();
   }
 
   function runNearestEvacMatrix() {
     if (!S.SatArcGIS) return;
-    if (evacMatrixLinks.length) { evacMatrixLinks = []; draw(); setStatus('Cleared Nearest Evacuation connectors.', false); return; }
+    if (evacMatrixLinks.length) { evacMatrixLinks = []; draw(); return; }
     var targets = doc.gis.features.filter(function (f) { return f.visible && (f.category === 'safe_zone' || f.category === 'evac_route'); });
     var sources = doc.gis.features.filter(function (f) { return f.visible && (f.category === 'building' || f.category === 'tent'); });
-    if (!targets.length || !sources.length) {
-      setStatus('Need at least one Building/Tent and one Safe Assembly/Route feature in GIS layer.', true);
-      return;
-    }
+    if (!targets.length || !sources.length) { alert('Add at least one Building/Tent and one Safe Assembly/Route feature in GIS layer.'); return; }
     evacMatrixLinks = S.SatArcGIS.computeNearestEvacMatrix(sources, targets, doc.calibration.pxPerMeter);
-    doc.layers.gis.visible = true;
-    draw();
-    setStatus('Computed Nearest Evacuation Matrix for ' + evacMatrixLinks.length + ' structure(s).', false);
+    doc.layers.gis.visible = true; draw();
   }
 
   function runSpatialQueryPrompt() {
     if (!S.SatArcGIS) return;
     var ref = selGisIds.length ? getGisById(selGisIds[0]) : null;
-    if (!ref) { setStatus('Select a reference GIS feature first for Select by Location.', true); return; }
+    if (!ref) { alert('Select a reference GIS feature first.'); return; }
     var rel = prompt('Spatial relation (intersects / within / contains / within_distance):', 'within_distance');
     if (!rel) return;
-    var dM = 0;
-    if (rel === 'within_distance') dM = parseFloat(prompt('Max distance in meters:', '20')) || 20;
+    var dM = rel === 'within_distance' ? (parseFloat(prompt('Max distance in meters:', '20')) || 20) : 0;
     var hits = S.SatArcGIS.selectByLocation(doc.gis.features, ref, rel.trim(), dM, doc.calibration.pxPerMeter);
-    selGisIds = [ref.id].concat(hits);
-    openBottomTab('attr');
-    syncUI(); draw();
-    setStatus('Spatial Query (' + rel + '): matched ' + hits.length + ' feature(s).', false);
+    selGisIds = [ref.id].concat(hits); openBottomTab('attr'); syncUI(); draw();
   }
 
   function runCogoInput() {
-    if (!S.SatArcGIS) return;
-    if (!(doc.calibration.pxPerMeter > 0)) { setStatus('Calibrate scale (px/m) before COGO input.', true); return; }
-    if (!gisDraftPts.length) { setStatus('Start a GIS Line or Polygon by clicking point 1 first.', true); return; }
-    var raw = prompt('COGO — Enter Distance (m), Bearing (deg) e.g. "25, 90":', '15, 0');
+    if (!S.SatArcGIS || !(doc.calibration.pxPerMeter > 0) || !gisDraftPts.length) { alert('Calibrate scale and click point 1 of a GIS Line/Polygon first.'); return; }
+    var raw = prompt('COGO — Distance (m), Bearing (deg) e.g. "25, 90":', '15, 0');
     if (!raw) return;
     var parts = raw.split(/[,;\s]+/).map(parseFloat);
     if (!(parts[0] > 0) || !isFinite(parts[1])) return;
     var nextPt = S.SatArcGIS.cogoNextPoint(gisDraftPts[gisDraftPts.length - 1], parts[0], parts[1], doc.calibration.pxPerMeter, doc.overlays.northDeg || 0);
-    if (nextPt) { gisDraftPts.push(nextPt); draw(); setStatus('COGO added vertex: ' + parts[0] + 'm @ ' + parts[1] + '°.', false); }
+    if (nextPt) { gisDraftPts.push(nextPt); draw(); }
   }
 
-  // GeoTerra Feature Modal Wrapper
   function openGeoTerraModalFor(pts, geom, editIdx) {
     if (!S.SatGeoTerra) return;
     S.SatGeoTerra.openFeatureModal({
-      state: doc.geoterra,
-      editIndex: editIdx,
-      geometry: geom,
-      points: pts,
-      lang: doc.lang,
+      state: doc.geoterra, editIndex: editIdx, geometry: geom, points: pts, lang: doc.lang,
       getCompassHeading: function () { return liveCompassDeg; },
       onSave: function (payload, idx) {
         pushUndo('Save GeoTerra Feature ' + payload.id);
-        if (idx >= 0) {
-          doc.geoterra.features[idx] = payload;
-        } else {
-          doc.geoterra.features.push(payload);
-          doc.geoterra.nextFeatNum++;
-        }
-        gtDraftPts = [];
-        doc.layers.geoterra.visible = true;
+        if (idx >= 0) doc.geoterra.features[idx] = payload;
+        else { doc.geoterra.features.push(payload); doc.geoterra.nextFeatNum++; }
+        gtDraftPts = []; doc.layers.geoterra.visible = true;
         persistToIDB(); syncUI(); draw();
-        setStatus('Saved GeoTerra feature ' + payload.id + '.', false);
       },
-      onCancel: function () {
-        if (editIdx < 0) gtDraftPts = [];
-        syncUI(); draw();
-      }
+      onCancel: function () { if (editIdx < 0) gtDraftPts = []; syncUI(); draw(); }
     });
   }
 
-  // Smart Cyber HUD GCP Modal (DD / DMS / UTM / Google Maps URL + Averaged GPS)
   function openGcpModal(imgPt) {
     if (!S.SatGeorefGPS) return;
     var bg = document.getElementById('scGcpModal');
-    if (!bg) {
-      bg = document.createElement('div');
-      bg.id = 'scGcpModal';
-      bg.className = 'sgt-bg';
-      bg.dataset.ajDone = '1';
-      document.body.appendChild(bg);
-    }
-    var gNum = doc.geoterra.gcps.length + 1;
-    var curFix = gpsEngine && gpsEngine.getCurrentFix();
+    if (!bg) { bg = document.createElement('div'); bg.id = 'scGcpModal'; bg.className = 'sgt-bg'; bg.dataset.ajDone = '1'; document.body.appendChild(bg); }
+    var gNum = doc.geoterra.gcps.length + 1, curFix = gpsEngine && gpsEngine.getCurrentFix();
     bg.innerHTML =
       '<div class="sgt-box">' +
         '<h3><span>Add Ground Control Point (GCP)</span><span class="satc-tag gis">GCP-' + gNum + '</span></h3>' +
         '<div style="font-size:10.5px;color:var(--sc-cyan)">Image Pixel: (' + Math.round(imgPt.x) + ', ' + Math.round(imgPt.y) + ')</div>' +
-        '<button type="button" class="satc-qbtn on" id="scGcpAvgBtn" style="justify-content:center">🛰 Capture Averaged Phone GPS (6 samples)</button>' +
-        '<label>Smart Paste (DD, DMS, UTM 36N, or Google Maps URL)<input type="text" id="scGcpPaste" dir="ltr" placeholder="31.351234, 34.284567 or Google Maps link..."></label>' +
-        '<div class="satc-grid2">' +
-          '<label>Latitude<input type="text" id="scGcpLat" dir="ltr" value="' + (curFix ? curFix.lat.toFixed(7) : '') + '"></label>' +
-          '<label>Longitude<input type="text" id="scGcpLon" dir="ltr" value="' + (curFix ? curFix.lon.toFixed(7) : '') + '"></label>' +
-        '</div>' +
+        '<button type="button" class="satc-qbtn on" id="scGcpAvgBtn" style="justify-content:center">🛰 Capture Averaged GPS (6 samples)</button>' +
+        '<label>Smart Paste (DD, DMS, UTM 36N, or Google Maps URL)<input type="text" id="scGcpPaste" dir="ltr" placeholder="31.351234, 34.284567"></label>' +
+        '<div class="satc-grid2"><label>Latitude<input type="text" id="scGcpLat" dir="ltr" value="' + (curFix ? curFix.lat.toFixed(7) : '') + '"></label><label>Longitude<input type="text" id="scGcpLon" dir="ltr" value="' + (curFix ? curFix.lon.toFixed(7) : '') + '"></label></div>' +
         '<label>GCP Label<input type="text" id="scGcpLbl" value="GCP-' + gNum + '"></label>' +
         '<div id="scGcpMsg" style="font-size:10px;color:var(--sc-amber)"></div>' +
-        '<div style="display:flex;gap:6px;justify-content:flex-end">' +
-          '<button type="button" class="satc-qbtn on" id="scGcpOk">Save GCP</button>' +
-          '<button type="button" class="satc-qbtn dng" id="scGcpCan">Cancel</button>' +
-        '</div>' +
+        '<div style="display:flex;gap:6px;justify-content:flex-end"><button type="button" class="satc-qbtn on" id="scGcpOk">Save GCP</button><button type="button" class="satc-qbtn dng" id="scGcpCan">Cancel</button></div>' +
       '</div>';
-
     var latEl = bg.querySelector('#scGcpLat'), lonEl = bg.querySelector('#scGcpLon'), msgEl = bg.querySelector('#scGcpMsg');
     bg.querySelector('#scGcpPaste').oninput = function () {
       var parsed = S.SatGeorefGPS.parseSmartCoords(this.value);
-      if (parsed) {
-        latEl.value = parsed.lat.toFixed(7);
-        lonEl.value = parsed.lon.toFixed(7);
-        msgEl.style.color = 'var(--sc-green2)';
-        msgEl.textContent = 'Parsed (' + parsed.format + ')';
-      }
+      if (parsed) { latEl.value = parsed.lat.toFixed(7); lonEl.value = parsed.lon.toFixed(7); msgEl.style.color = 'var(--sc-green2)'; msgEl.textContent = 'Parsed (' + parsed.format + ')'; }
     };
     bg.querySelector('#scGcpAvgBtn').onclick = function () {
-      ensureGpsCompassEngines();
-      var btn = this; btn.disabled = true;
-      msgEl.style.color = 'var(--sc-cyan)'; msgEl.textContent = 'Averaging GPS samples...';
-      gpsEngine.captureAveragedFix(6, function (n, tot, acc) {
-        msgEl.textContent = 'Sample ' + n + '/' + tot + ' (±' + Math.round(acc) + 'm)...';
-      }, function (err, avg) {
+      ensureGpsCompassEngines(); var btn = this; btn.disabled = true;
+      msgEl.style.color = 'var(--sc-cyan)'; msgEl.textContent = 'Averaging GPS...';
+      gpsEngine.captureAveragedFix(6, function (n, tot, acc) { msgEl.textContent = 'Sample ' + n + '/' + tot + ' (±' + Math.round(acc) + 'm)...'; }, function (err, avg) {
         btn.disabled = false;
         if (err || !avg) { msgEl.style.color = 'var(--sc-red)'; msgEl.textContent = (err && err.message) || 'GPS unavailable'; return; }
         latEl.value = avg.lat.toFixed(7); lonEl.value = avg.lon.toFixed(7);
-        msgEl.style.color = 'var(--sc-green2)';
-        msgEl.textContent = 'Averaged ' + avg.sampleCount + ' fixes (±' + avg.accuracy + 'm)';
+        msgEl.style.color = 'var(--sc-green2)'; msgEl.textContent = 'Averaged ' + avg.sampleCount + ' fixes (±' + avg.accuracy + 'm)';
       });
     };
     bg.querySelector('#scGcpOk').onclick = function () {
       var lat = parseFloat(latEl.value), lon = parseFloat(lonEl.value);
-      if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-        msgEl.style.color = 'var(--sc-red)'; msgEl.textContent = 'Invalid Latitude/Longitude.'; return;
-      }
+      if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) { msgEl.style.color = 'var(--sc-red)'; msgEl.textContent = 'Invalid Lat/Lon.'; return; }
       pushUndo('Add GCP-' + gNum);
-      doc.geoterra.gcps.push({
-        x: +imgPt.x.toFixed(2), y: +imgPt.y.toFixed(2),
-        lat: lat, lon: lon,
-        label: bg.querySelector('#scGcpLbl').value.trim() || ('GCP-' + gNum),
-        enabled: true
-      });
-      var m = recomputeGeoref(true);
-      bg.classList.remove('open');
-      persistToIDB(); syncUI(); draw();
-      setStatus(m ? ('GCP saved! Active Model: ' + m.mode + ' | RMS ' + m.rmsPx + 'px | Scale ' + m.pxPerMeter + ' px/m') : ('Saved GCP-' + gNum + '. Add at least 2 GCPs to activate georeferencing.'), false);
+      doc.geoterra.gcps.push({ x: +imgPt.x.toFixed(2), y: +imgPt.y.toFixed(2), lat: lat, lon: lon, label: bg.querySelector('#scGcpLbl').value.trim() || ('GCP-' + gNum), enabled: true });
+      recomputeGeoref(true); bg.classList.remove('open'); persistToIDB(); syncUI(); draw();
     };
     bg.querySelector('#scGcpCan').onclick = function () { bg.classList.remove('open'); };
     bg.classList.add('open');
   }
 
-  // Push Sat Studio / GIS Polygons directly to AJ-GeoCAD 2D CAD & 3D WebGL Engine
   function pushFeaturesToCad(open3DAfter) {
-    if (!St || !St.project || !imgs.base) { setStatus('Load a base satellite image first.', true); return; }
+    var d = getBaseDims();
+    if (!St || !St.project || !d.w) { alert('حمّل خريطة أو جلسة أولاً.'); return; }
     var ppm = doc.calibration.pxPerMeter || (georefModel && georefModel.pxPerMeter) || 0;
-    if (!(ppm > 0)) { setStatus('Calibrate metric scale (px/m) or GCPs before pushing to 2D/3D CAD.', true); return; }
+    if (!(ppm > 0)) { alert('عاير المقياس (px/m) أو اربط نقطتي GCP أولاً.'); return; }
     var gisList = (doc.gis.features || []).filter(function (f) { return f.visible && f.points.length >= 1; });
     if (!gisList.length) {
       if (open3DAfter && S.WebGL3D) { close(); S.WebGL3D.open(); return; }
-      setStatus('No visible GIS features to push to CAD. Draw polygons/points or click Push to ArcGIS in GeoTerra first.', true);
-      return;
+      alert('لا توجد معالم GIS لإرسالها. ارسم معالم أو اضغط Push to ArcGIS في GeoTerra أولاً.'); return;
     }
-    var cx0 = imgs.base.naturalWidth / 2, cy0 = imgs.base.naturalHeight / 2;
+    var cx0 = d.w / 2, cy0 = d.h / 2;
     var catMap = { building: 'building', tent: 'tent', evac_route: 'road', safe_zone: 'assembly', hazard: 'hazard', perimeter: 'fence', camera: 'camera', buffer: 'yard', generic: 'building' };
     St.snapshot();
-    var added = 0;
     gisList.forEach(function (f) {
       var mPts = f.points.map(function (p) { return { x: +((p.x - cx0) / ppm).toFixed(2), y: +((cy0 - p.y) / ppm).toFixed(2) }; });
-      var mx = 0, my = 0; mPts.forEach(function (p) { mx += p.x; my += p.y; });
-      mx /= mPts.length; my /= mPts.length;
-      var cadCat = catMap[f.category] || 'building';
-      var isPoly = (f.geom === 'polygon' || f.geom === 'circle') && mPts.length >= 3;
+      var mx = 0, my = 0; mPts.forEach(function (p) { mx += p.x; my += p.y; }); mx /= mPts.length; my /= mPts.length;
+      var cadCat = catMap[f.category] || 'building', isPoly = (f.geom === 'polygon' || f.geom === 'circle') && mPts.length >= 3;
       St.project.features.push(St.newFeature({
-        en_name: f.name || f.id,
-        category: cadCat,
-        geometryType: isPoly ? 'polygon' : 'point',
-        coordsMetric: isPoly ? mPts : [mPts[0]],
-        center: { x: +mx.toFixed(2), y: +my.toFixed(2) },
-        height_m: cadCat === 'building' ? 6 : (cadCat === 'tent' ? 2.6 : 2.5),
-        color: f.color || '#00ff9d',
-        notes: f.notes || 'Synced from Sat Studio GIS'
+        en_name: f.name || f.id, category: cadCat, geometryType: isPoly ? 'polygon' : 'point',
+        coordsMetric: isPoly ? mPts : [mPts[0]], center: { x: +mx.toFixed(2), y: +my.toFixed(2) },
+        height_m: cadCat === 'building' ? 6 : (cadCat === 'tent' ? 2.6 : 2.5), color: f.color || '#00ff9d', notes: f.notes || 'Sat Studio GIS'
       }));
-      added++;
     });
     if (doc.overlays.northDeg) St.project.meta.trueNorthOffsetDeg = doc.overlays.northDeg;
     St.emit('change');
-    setStatus('Pushed ' + added + ' GIS feature(s) to AJ-GeoCAD 2D/3D workspace.', false);
-    if (open3DAfter && S.WebGL3D) {
-      close();
-      S.WebGL3D.open();
-    }
+    if (open3DAfter && S.WebGL3D) { close(); S.WebGL3D.open(); }
   }
 
-  // Export World File (.pgw + .prj) & KML Overlay & GIS Formats
   function downloadTextFile(text, filename, mime) {
     var blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
     if (S.SatGeoTerra && S.SatGeoTerra.triggerDownloadBlob) S.SatGeoTerra.triggerDownloadBlob(blob, filename);
   }
 
   function exportWorldFilePackage() {
-    if (!georefModel || !imgs.base || !S.SatGeorefGPS) {
-      setStatus('Georeference the map with ≥ 2 GCPs first to export .PGW + .PRJ.', true); return;
-    }
-    var pgw = S.SatGeorefGPS.buildWorldFilePGW(georefModel, imgs.base.naturalWidth, imgs.base.naturalHeight);
-    var kml = S.SatGeorefGPS.buildKmlGroundOverlay(georefModel, imgs.base.naturalWidth, imgs.base.naturalHeight, 'Master_Clean_2D.png', doc.overlays.titleEn || 'AJ-GeoCAD Map');
+    var d = getBaseDims();
+    if (!georefModel || !d.w || !S.SatGeorefGPS) { alert('اربط الخريطة بـ 2 GCP على الأقل أولاً.'); return; }
+    var pgw = S.SatGeorefGPS.buildWorldFilePGW(georefModel, d.w, d.h);
+    var kml = S.SatGeorefGPS.buildKmlGroundOverlay(georefModel, d.w, d.h, 'Master_Clean_2D.png', doc.overlays.titleEn || 'AJ-GeoCAD Map');
     if (S.SatGeoTerra && S.SatGeoTerra.buildZipBlob) {
-      var entries = [
-        { name: 'Master_Clean_2D.pgw', data: pgw },
-        { name: 'Master_Clean_2D.prj', data: S.SatGeorefGPS.WGS84_PRJ_WKT }
-      ];
+      var entries = [{ name: 'Master_Clean_2D.pgw', data: pgw }, { name: 'Master_Clean_2D.prj', data: S.SatGeorefGPS.WGS84_PRJ_WKT }];
       if (kml) entries.push({ name: 'doc.kml', data: kml });
       S.SatGeoTerra.triggerDownloadBlob(S.SatGeoTerra.buildZipBlob(entries), 'ArcGIS_Georef_WorldFile.zip');
-      setStatus('Exported ArcGIS_Georef_WorldFile.zip (.pgw + .prj + KML Overlay). Pair with Master_Clean_2D.png.', false);
     } else {
       downloadTextFile(pgw, 'Master_Clean_2D.pgw');
-      downloadTextFile(S.SatGeorefGPS.WGS84_PRJ_WKT, 'Master_Clean_2D.prj');
     }
   }
 
@@ -1819,48 +1669,35 @@ window.SOS = window.SOS || {};
     var copy = normalizeAsset(JSON.parse(JSON.stringify(a)));
     copy.id = uid('ast'); copy.name = a.name + ' (copy)';
     copy.x = +(a.x + 20).toFixed(2); copy.y = +(a.y + 20).toFixed(2); copy.locked = false;
-    doc.assets.push(copy); selAssetId = copy.id;
-    persistToIDB(); syncUI(); draw();
+    doc.assets.push(copy); selAssetId = copy.id; persistToIDB(); syncUI(); draw();
   }
-
   function deleteSelectedAsset() {
     var a = getSelAsset(); if (!a) return;
-    pushUndo('Delete Asset');
-    doc.assets = doc.assets.filter(function (x) { return x.id !== a.id; });
+    pushUndo('Delete Asset'); doc.assets = doc.assets.filter(function (x) { return x.id !== a.id; });
     selAssetId = null; persistToIDB(); syncUI(); draw();
   }
-
   function reorderSelectedAsset(dir) {
-    var idx = -1;
-    for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === selAssetId) { idx = i; break; }
-    if (idx < 0) return;
-    var ni = idx + dir;
-    if (ni < 0 || ni >= doc.assets.length) return;
-    pushUndo('Reorder Asset');
-    var tmp = doc.assets[idx]; doc.assets[idx] = doc.assets[ni]; doc.assets[ni] = tmp;
+    var idx = -1; for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === selAssetId) { idx = i; break; }
+    if (idx < 0 || idx + dir < 0 || idx + dir >= doc.assets.length) return;
+    pushUndo('Reorder Asset'); var tmp = doc.assets[idx]; doc.assets[idx] = doc.assets[idx + dir]; doc.assets[idx + dir] = tmp;
     persistToIDB(); syncUI(); draw();
   }
 
   // =========================================================================
-  // 10. POINTER & KEYBOARD HANDLERS (ALL PHOTOSHOP + ARCGIS + GEOTERRA TOOLS)
+  // 10. POINTER & KEYBOARD HANDLERS
   // =========================================================================
   function posOf(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   function twoPtrs() {
     var ks = Object.keys(ptrs), a = ptrs[ks[0]], b = ptrs[ks[1]];
     return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
-
   function getSnappedImgPt(rawIp, e, draftArr) {
-    var pt = rawIp;
-    snapPreview = null;
+    var pt = rawIp; snapPreview = null;
     if (S.SatArcGIS && doc.gis.snap && doc.gis.snap.enabled && (tool === 'gis_point' || tool === 'gis_line' || tool === 'poly_draw' || tool === 'gis_split' || tool === 'gis_circle')) {
       var res = S.SatArcGIS.snapPoint(rawIp, doc.gis.features, draftArr, 14 / Math.max(0.1, view.s), doc.gis.snap);
-      snapPreview = res;
-      if (res.snapped) pt = { x: res.x, y: res.y };
+      snapPreview = res; if (res.snapped) pt = { x: res.x, y: res.y };
     }
-    if (e && e.shiftKey && draftArr && draftArr.length && S.SatArcGIS) {
-      pt = S.SatArcGIS.applyOrtho(draftArr[draftArr.length - 1], pt, 45);
-    }
+    if (e && e.shiftKey && draftArr && draftArr.length && S.SatArcGIS) pt = S.SatArcGIS.applyOrtho(draftArr[draftArr.length - 1], pt, 45);
     return pt;
   }
 
@@ -1872,115 +1709,70 @@ window.SOS = window.SOS || {};
       else if (tool === 'lasso_erase' && cutPts.length >= 3) applyLassoEraseAsset();
       else if ((tool === 'poly_draw' && gisDraftPts.length >= 3) || (tool === 'gis_line' && gisDraftPts.length >= 2) || (tool === 'gis_split' && gisDraftPts.length >= 2)) finalizeGisShape();
       else if (tool === 'gt_survey' && gtDraftPts.length >= 3) openGeoTerraModalFor(gtDraftPts, 'polygon', -1);
-      else if (tool === 'gt_boundary' && doc.geoterra.boundary.length >= 3) { pushUndo('Close GeoTerra Boundary'); doc.geoterra.boundaryClosed = true; persistToIDB(); syncUI(); draw(); }
+      else if (tool === 'gt_boundary' && doc.geoterra.boundary.length >= 3) { pushUndo('Close Boundary'); doc.geoterra.boundaryClosed = true; persistToIDB(); syncUI(); draw(); }
     });
 
     cv.addEventListener('pointerdown', function (e) {
       cv.setPointerCapture(e.pointerId);
       var p = posOf(e); ptrs[e.pointerId] = p;
-      if (Object.keys(ptrs).length === 2) {
-        var t = twoPtrs();
-        drag = { m: 'pinch', d: t.d, s: view.s, imgPt: s2i(t.x, t.y) };
-        return;
-      }
+      if (Object.keys(ptrs).length === 2) { var t = twoPtrs(); drag = { m: 'pinch', d: t.d, s: view.s, imgPt: s2i(t.x, t.y) }; return; }
       var ip = s2i(p.x, p.y); hovImg = ip;
-      if (e.button === 1 || e.button === 2 || space || tool === 'pan' || !imgs.base) {
-        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
-        return;
+      var dims = getBaseDims();
+      if (e.button === 1 || e.button === 2 || space || tool === 'pan' || !dims.w) {
+        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy }; return;
       }
+      if (driftFixPending) { driftFixPending = false; triggerDriftFixAtClick(ip); return; }
 
-      if (driftFixPending) {
-        driftFixPending = false;
-        triggerDriftFixAtClick(ip);
-        return;
-      }
-
-      // 1. SELECT / MOVE (Pins, Assets, GIS Features, GeoTerra Vertices)
       if (tool === 'select') {
         var hitP = hitPinAt(p);
-        if (hitP) {
-          selPinId = hitP.id;
-          drag = { m: 'movePin', pin: hitP, sx: ip.x, sy: ip.y, x0: hitP.x, y0: hitP.y, pushed: false };
-          syncUI(); draw(); return;
-        }
-        var sel = getSelAsset();
-        var hk = hitAssetHandle(sel, p);
+        if (hitP) { selPinId = hitP.id; drag = { m: 'movePin', pin: hitP, sx: ip.x, sy: ip.y, x0: hitP.x, y0: hitP.y, pushed: false }; syncUI(); draw(); return; }
+        var sel = getSelAsset(), hk = hitAssetHandle(sel, p);
         if (hk && sel) {
           if (hk === 'rot') { drag = { m: 'rot', a: sel, pushed: false }; return; }
           var hw = sel.wPx / 2, hh = sel.hPx / 2;
           var oppMap = { tl: [hw, hh], tr: [-hw, hh], br: [-hw, -hh], bl: [hw, -hh] };
           var signMap = { tl: [-1, -1], tr: [1, -1], br: [1, 1], bl: [-1, 1] };
-          drag = {
-            m: 'resize', a: sel, sx: signMap[hk][0], sy: signMap[hk][1],
-            anchor: assetLocalToImg(sel, oppMap[hk][0], oppMap[hk][1]),
-            origW: sel.wPx, origH: sel.hPx, rad: (sel.rotationDeg || 0) * D, pushed: false
-          };
+          drag = { m: 'resize', a: sel, sx: signMap[hk][0], sy: signMap[hk][1], anchor: assetLocalToImg(sel, oppMap[hk][0], oppMap[hk][1]), origW: sel.wPx, origH: sel.hPx, rad: (sel.rotationDeg || 0) * D, pushed: false };
           return;
         }
         var hitA = hitAssetAt(ip);
-        if (hitA) {
-          selAssetId = hitA.id;
-          drag = { m: 'move', a: hitA, sx: ip.x, sy: ip.y, x0: hitA.x, y0: hitA.y, pushed: false };
-          syncUI(); draw(); return;
-        }
+        if (hitA) { selAssetId = hitA.id; drag = { m: 'move', a: hitA, sx: ip.x, sy: ip.y, x0: hitA.x, y0: hitA.y, pushed: false }; syncUI(); draw(); return; }
         var hitG = hitGisAt(ip, p);
         if (hitG) {
-          if (e.ctrlKey || e.shiftKey) {
-            var pos = selGisIds.indexOf(hitG.id);
-            if (pos >= 0) selGisIds.splice(pos, 1); else selGisIds.push(hitG.id);
-          } else {
-            selGisIds = [hitG.id];
-          }
-          selAssetId = null;
-          syncUI(); draw(); return;
+          if (e.ctrlKey || e.shiftKey) { var pos = selGisIds.indexOf(hitG.id); if (pos >= 0) selGisIds.splice(pos, 1); else selGisIds.push(hitG.id); }
+          else selGisIds = [hitG.id];
+          selAssetId = null; syncUI(); draw(); return;
         }
         selAssetId = null; selGisIds = [];
-        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
-        syncUI(); draw(); return;
+        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy }; syncUI(); draw(); return;
       }
 
-      // 2. PHOTOSHOP TOOLS
       if (tool === 'crop_asset' || tool === 'lasso_erase') {
-        if (!getSelAsset()) {
-          var ca = hitAssetAt(ip);
-          if (ca) { selAssetId = ca.id; syncUI(); }
-          else { setStatus('Select an asset first before cropping/erasing.', true); return; }
+        if (!getSelAsset()) { var ca = hitAssetAt(ip); if (ca) { selAssetId = ca.id; syncUI(); } else { setStatus('Select an asset first.', true); return; } }
+        if (cutPts.length >= 3 && Math.hypot(p.x - i2s(cutPts[0].x, cutPts[0].y)[0], p.y - i2s(cutPts[0].x, cutPts[0].y)[1]) <= 13) {
+          if (tool === 'crop_asset') applyCropSelectedAsset(); else applyLassoEraseAsset(); return;
         }
-        if (cutPts.length >= 3) {
-          var f0 = i2s(cutPts[0].x, cutPts[0].y);
-          if (Math.hypot(p.x - f0[0], p.y - f0[1]) <= 13) {
-            if (tool === 'crop_asset') applyCropSelectedAsset(); else applyLassoEraseAsset();
-            return;
-          }
-        }
-        cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
-        syncUI(); draw(); return;
+        cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }); syncUI(); draw(); return;
       }
       if (tool === 'crop_base') { drag = { m: 'crop_base', p1: ip, p2: ip }; draw(); return; }
       if (tool === 'wand') { applyMagicWandOnAsset(ip); return; }
       if (tool === 'eyedropper') {
-        if (S.SatPhotoTools) {
-          photoCfg.color = S.SatPhotoTools.sampleColorAt(imgs.base, ip.x, ip.y);
-          setStatus('Sampled color ' + photoCfg.color, false);
-          setTool('brush');
-        }
+        if (S.SatPhotoTools && imgs.base) { photoCfg.color = S.SatPhotoTools.sampleColorAt(imgs.base, ip.x, ip.y); setTool('brush'); }
         return;
       }
       if (tool === 'brush') { pushUndo('Brush Stroke'); stampPaintBrushDab(ip); drag = { m: 'brush', last: ip }; draw(); return; }
       if (tool === 'clone') {
         if (e.altKey || cloneCfg.pickMode || !cloneCfg.src) {
           cloneCfg.src = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }; cloneCfg.pickMode = false;
-          setStatus('Clone Source set. Paint over target (Alt+Click to re-pick).', false);
-          syncUI(); draw(); return;
+          setStatus('Clone Source set. Paint over target.', false); syncUI(); draw(); return;
         }
         pushUndo('Clone Patch'); doc.layers.cleanup.visible = true;
         var p0 = { id: uid('ptc'), sx: cloneCfg.src.x, sy: cloneCfg.src.y, dx: +ip.x.toFixed(2), dy: +ip.y.toFixed(2), r: cloneCfg.radius, feather: cloneCfg.feather, opacity: cloneCfg.opacity, rotDeg: cloneCfg.rotDeg };
         doc.patches.push(p0); incrementalStampPatch(p0);
-        drag = { m: 'clone', startSrc: { x: cloneCfg.src.x, y: cloneCfg.src.y }, startDst: ip, lastDst: ip };
-        draw(); return;
+        drag = { m: 'clone', startSrc: { x: cloneCfg.src.x, y: cloneCfg.src.y }, startDst: ip, lastDst: ip }; draw(); return;
       }
       if (tool === 'erase') {
-        if (!hasActiveCleanupImg() && !doc.patches.length) { setStatus('Nothing on Layer 02_Ground_Cleanup to erase.', true); return; }
+        if (!hasActiveCleanupImg() && !doc.patches.length) { setStatus('Nothing on Cleanup layer to erase.', true); return; }
         pushUndo('Soft Erase');
         var pt0 = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
         var st = { id: uid('ers'), r: eraseCfg.radius, feather: eraseCfg.feather, opacity: eraseCfg.opacity, pts: [pt0] };
@@ -1988,41 +1780,25 @@ window.SOS = window.SOS || {};
         drag = { m: 'erase', stroke: st, last: pt0 }; draw(); return;
       }
       if (tool === 'cutout') {
-        if (cutPts.length >= 3) {
-          var c0 = i2s(cutPts[0].x, cutPts[0].y);
-          if (Math.hypot(p.x - c0[0], p.y - c0[1]) <= 13) { extractCutoutFromBase(); return; }
-        }
+        if (cutPts.length >= 3 && Math.hypot(p.x - i2s(cutPts[0].x, cutPts[0].y)[0], p.y - i2s(cutPts[0].x, cutPts[0].y)[1]) <= 13) { extractCutoutFromBase(); return; }
         cutPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }); syncUI(); draw(); return;
       }
-
-      // 3. PROCEDURAL SATELLITE ASSETS
       if (tool === 'futsal_rect') { drag = { m: 'futsal_rect', p1: ip, p2: ip }; draw(); return; }
       if (tool === 'building_add') { addBuildingAt(ip); return; }
       if (tool === 'tent_add') { addTentAt(ip); return; }
       if (tool === 'tree_add') { addTreeAt(ip); return; }
 
-      // 4. ARCGIS VECTOR & SPATIAL TOOLS
       if (tool === 'gis_point') {
-        var spPt = getSnappedImgPt(ip, e, null);
-        pushUndo('Add GIS Point');
+        var spPt = getSnappedImgPt(ip, e, null); pushUndo('Add GIS Point');
         var nf = S.SatArcGIS.createFeature({ geom: 'point', category: doc.gis.activeCategory, points: [spPt] });
-        doc.gis.features.push(nf); doc.layers.gis.visible = true; selGisIds = [nf.id];
-        persistToIDB(); syncUI(); draw(); return;
+        doc.gis.features.push(nf); doc.layers.gis.visible = true; selGisIds = [nf.id]; persistToIDB(); syncUI(); draw(); return;
       }
       if (tool === 'gis_line' || tool === 'poly_draw' || tool === 'gis_split') {
         var spG = getSnappedImgPt(ip, e, gisDraftPts);
-        if (tool === 'poly_draw' && gisDraftPts.length >= 3) {
-          var g0 = i2s(gisDraftPts[0].x, gisDraftPts[0].y);
-          if (Math.hypot(p.x - g0[0], p.y - g0[1]) <= 13) { finalizeGisShape(); return; }
-        }
-        gisDraftPts.push({ x: +spG.x.toFixed(2), y: +spG.y.toFixed(2) });
-        setStatus('Vertices: ' + gisDraftPts.length + ' (Enter or double-click to finish; Shift = Ortho).', false);
-        syncUI(); draw(); return;
+        if (tool === 'poly_draw' && gisDraftPts.length >= 3 && Math.hypot(p.x - i2s(gisDraftPts[0].x, gisDraftPts[0].y)[0], p.y - i2s(gisDraftPts[0].x, gisDraftPts[0].y)[1]) <= 13) { finalizeGisShape(); return; }
+        gisDraftPts.push({ x: +spG.x.toFixed(2), y: +spG.y.toFixed(2) }); syncUI(); draw(); return;
       }
-      if (tool === 'gis_circle') {
-        var scPt = getSnappedImgPt(ip, e, null);
-        drag = { m: 'gis_circle', c: scPt, edge: scPt }; draw(); return;
-      }
+      if (tool === 'gis_circle') { var scPt = getSnappedImgPt(ip, e, null); drag = { m: 'gis_circle', c: scPt, edge: scPt }; draw(); return; }
       if (tool === 'gis_buffer') { runBufferTool(ip); return; }
       if (tool === 'gis_viewshed') { runViewshedAt(ip); return; }
       if (tool === 'pin') {
@@ -2032,35 +1808,25 @@ window.SOS = window.SOS || {};
         var catObj = (S.SatExport && S.SatExport.PIN_CATS[pinCat]) || { color: '#0284c7' };
         var nIdx = doc.overlays.pins.length + 1;
         var np = { id: uid('pin'), x: +ip.x.toFixed(2), y: +ip.y.toFixed(2), cat: pinCat, color: catObj.color, labelEn: 'Point ' + nIdx, labelAr: 'موقع ' + nIdx, showTag: false };
-        doc.overlays.pins.push(np); selPinId = np.id;
-        persistToIDB(); syncUI(); draw(); return;
+        doc.overlays.pins.push(np); selPinId = np.id; persistToIDB(); syncUI(); draw(); return;
       }
       if (tool === 'calibrate') {
-        if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) calibDraft = { p1: ip, p2: null };
-        else calibDraft.p2 = ip;
+        if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) calibDraft = { p1: ip, p2: null }; else calibDraft.p2 = ip;
         syncUI(); draw(); return;
       }
       if (tool === 'bearing_cal') {
-        if (!bearingDraft.p1) { bearingDraft = { p1: ip, p2: null }; setStatus('Click Point 2 in True North direction.', false); draw(); }
+        if (!bearingDraft.p1) { bearingDraft = { p1: ip, p2: null }; draw(); }
         else { bearingDraft.p2 = ip; draw(); finalizeBearingCalibration(bearingDraft.p1, bearingDraft.p2); }
         return;
       }
-      if (tool === 'measure') {
-        if (measPts.length >= 2) measPts = [];
-        measPts.push(ip); draw(); return;
-      }
+      if (tool === 'measure') { if (measPts.length >= 2) measPts = []; measPts.push(ip); draw(); return; }
 
-      // 5. GEOTERRA FIELD SURVEY TOOLS
       if (tool === 'gt_georef') {
-        // Check if dragging an existing GCP
         for (var gi = 0; gi < doc.geoterra.gcps.length; gi++) {
           var gsp = i2s(doc.geoterra.gcps[gi].x, doc.geoterra.gcps[gi].y);
-          if (Math.hypot(p.x - gsp[0], p.y - gsp[1]) <= 13) {
-            drag = { m: 'moveGcp', idx: gi, pushed: false }; return;
-          }
+          if (Math.hypot(p.x - gsp[0], p.y - gsp[1]) <= 13) { drag = { m: 'moveGcp', idx: gi, pushed: false }; return; }
         }
-        openGcpModal(ip);
-        return;
+        openGcpModal(ip); return;
       }
       if (tool === 'gt_gps_drop') { dropGpsPointNow(); return; }
       if (tool === 'gt_boundary') {
@@ -2068,19 +1834,11 @@ window.SOS = window.SOS || {};
         for (var bi = 0; bi < bPts.length; bi++) {
           var bsp = i2s(bPts[bi].x, bPts[bi].y);
           if (Math.hypot(p.x - bsp[0], p.y - bsp[1]) <= 13) {
-            if (bi === 0 && !doc.geoterra.boundaryClosed && bPts.length >= 3) {
-              pushUndo('Close Village Boundary'); doc.geoterra.boundaryClosed = true;
-              persistToIDB(); syncUI(); draw(); return;
-            }
+            if (bi === 0 && !doc.geoterra.boundaryClosed && bPts.length >= 3) { pushUndo('Close Boundary'); doc.geoterra.boundaryClosed = true; persistToIDB(); syncUI(); draw(); return; }
             drag = { m: 'moveGtBound', idx: bi, pushed: false }; return;
           }
         }
-        if (!doc.geoterra.boundaryClosed) {
-          pushUndo('Add Boundary Vertex');
-          doc.layers.geoterra.visible = true;
-          bPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
-          persistToIDB(); syncUI(); draw();
-        }
+        if (!doc.geoterra.boundaryClosed) { pushUndo('Add Boundary Vertex'); doc.layers.geoterra.visible = true; bPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }); persistToIDB(); syncUI(); draw(); }
         return;
       }
       if (tool === 'gt_survey') {
@@ -2089,53 +1847,34 @@ window.SOS = window.SOS || {};
             var fp = doc.geoterra.features[fi].points;
             for (var vi = 0; vi < fp.length; vi++) {
               var vsp = i2s(fp[vi].x, fp[vi].y);
-              if (Math.hypot(p.x - vsp[0], p.y - vsp[1]) <= 12) {
-                drag = { m: 'moveGtVert', fi: fi, vi: vi, pushed: false }; return;
-              }
+              if (Math.hypot(p.x - vsp[0], p.y - vsp[1]) <= 12) { drag = { m: 'moveGtVert', fi: fi, vi: vi, pushed: false }; return; }
             }
           }
           return;
         }
-        if (doc.geoterra.surveyGeom === 'point') {
-          openGeoTerraModalFor([ip], 'point', -1);
-          return;
+        if (doc.geoterra.surveyGeom === 'point') { openGeoTerraModalFor([ip], 'point', -1); return; }
+        if (gtDraftPts.length >= 3 && Math.hypot(p.x - i2s(gtDraftPts[0].x, gtDraftPts[0].y)[0], p.y - i2s(gtDraftPts[0].x, gtDraftPts[0].y)[1]) <= 13) {
+          openGeoTerraModalFor(gtDraftPts, 'polygon', -1); return;
         }
-        if (gtDraftPts.length >= 3) {
-          var gt0 = i2s(gtDraftPts[0].x, gtDraftPts[0].y);
-          if (Math.hypot(p.x - gt0[0], p.y - gt0[1]) <= 13) {
-            openGeoTerraModalFor(gtDraftPts, 'polygon', -1); return;
-          }
-        }
-        doc.layers.geoterra.visible = true;
-        gtDraftPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) });
-        syncUI(); draw(); return;
+        doc.layers.geoterra.visible = true; gtDraftPts.push({ x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }); syncUI(); draw(); return;
       }
     });
 
     cv.addEventListener('pointermove', function (e) {
       var p = posOf(e); if (ptrs[e.pointerId]) ptrs[e.pointerId] = p;
       var ip = s2i(p.x, p.y); hovImg = ip;
-      if (!drag) {
-        getSnappedImgPt(ip, e, gisDraftPts);
-        draw(); return;
-      }
+      var dims = getBaseDims();
+      if (!drag) { getSnappedImgPt(ip, e, gisDraftPts); draw(); return; }
       if (drag.m === 'pan') { view.ox = drag.ox + (p.x - drag.x); view.oy = drag.oy + (p.y - drag.y); }
       else if (drag.m === 'pinch' && Object.keys(ptrs).length >= 2) {
         var t = twoPtrs(), ns = clamp(drag.s * t.d / drag.d, minScale(), 16);
         view.s = ns; view.ox = t.x - drag.imgPt.x * ns; view.oy = t.y - drag.imgPt.y * ns;
       } else if (drag.m === 'crop_base' || drag.m === 'futsal_rect') { drag.p2 = ip; }
       else if (drag.m === 'gis_circle') { drag.edge = ip; }
-      else if (drag.m === 'brush') {
-        if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(2, photoCfg.radius * 0.25)) {
-          stampPaintBrushDab(ip); drag.last = ip;
-        }
-      } else if (drag.m === 'move') {
-        if (!drag.pushed) { pushUndo('Move Asset'); drag.pushed = true; }
-        drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.a.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2);
-      } else if (drag.m === 'movePin') {
-        if (!drag.pushed) { pushUndo('Move Pin'); drag.pushed = true; }
-        drag.pin.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.pin.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2);
-      } else if (drag.m === 'rot') {
+      else if (drag.m === 'brush') { if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(2, photoCfg.radius * 0.25)) { stampPaintBrushDab(ip); drag.last = ip; } }
+      else if (drag.m === 'move') { if (!drag.pushed) { pushUndo('Move Asset'); drag.pushed = true; } drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.a.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2); }
+      else if (drag.m === 'movePin') { if (!drag.pushed) { pushUndo('Move Pin'); drag.pushed = true; } drag.pin.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.pin.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2); }
+      else if (drag.m === 'rot') {
         if (!drag.pushed) { pushUndo('Rotate Asset'); drag.pushed = true; }
         var deg = ((Math.atan2(ip.y - drag.a.y, ip.x - drag.a.x) / D + 90) % 360 + 360) % 360;
         if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -2145,10 +1884,7 @@ window.SOS = window.SOS || {};
         var ux = Math.cos(drag.rad), uy = Math.sin(drag.rad), vx = -Math.sin(drag.rad), vy = Math.cos(drag.rad);
         var ddx = ip.x - drag.anchor.x, ddy = ip.y - drag.anchor.y;
         var nw = Math.max(8, (ddx * ux + ddy * uy) * drag.sx), nh = Math.max(8, (ddx * vx + ddy * vy) * drag.sy);
-        if (drag.a.lockAspect || e.shiftKey) {
-          var asp = drag.origW / Math.max(1, drag.origH);
-          if (nw / drag.origW >= nh / drag.origH) nh = nw / asp; else nw = nh * asp;
-        }
+        if (drag.a.lockAspect || e.shiftKey) { var asp = drag.origW / Math.max(1, drag.origH); if (nw / drag.origW >= nh / drag.origH) nh = nw / asp; else nw = nh * asp; }
         drag.a.x = +(drag.anchor.x + (drag.sx * nw / 2) * ux + (drag.sy * nh / 2) * vx).toFixed(2);
         drag.a.y = +(drag.anchor.y + (drag.sx * nw / 2) * uy + (drag.sy * nh / 2) * vy).toFixed(2);
         drag.a.wPx = +nw.toFixed(2); drag.a.hPx = +nh.toFixed(2);
@@ -2161,36 +1897,27 @@ window.SOS = window.SOS || {};
         }
       } else if (drag.m === 'erase') {
         if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(3, eraseCfg.radius * 0.22)) {
-          var nxt = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) };
-          drag.stroke.pts.push(nxt); incrementalErase(drag.last, nxt, drag.stroke, false); drag.last = nxt;
+          var nxt = { x: +ip.x.toFixed(2), y: +ip.y.toFixed(2) }; drag.stroke.pts.push(nxt); incrementalErase(drag.last, nxt, drag.stroke, false); drag.last = nxt;
         }
       } else if (drag.m === 'moveGcp') {
         if (!drag.pushed) { pushUndo('Move GCP'); drag.pushed = true; }
-        doc.geoterra.gcps[drag.idx].x = +clamp(ip.x, 0, imgs.base.naturalWidth).toFixed(2);
-        doc.geoterra.gcps[drag.idx].y = +clamp(ip.y, 0, imgs.base.naturalHeight).toFixed(2);
+        doc.geoterra.gcps[drag.idx].x = +clamp(ip.x, 0, dims.w).toFixed(2);
+        doc.geoterra.gcps[drag.idx].y = +clamp(ip.y, 0, dims.h).toFixed(2);
         recomputeGeoref(true);
       } else if (drag.m === 'moveGtBound') {
         if (!drag.pushed) { pushUndo('Move Boundary Vertex'); drag.pushed = true; }
-        doc.geoterra.boundary[drag.idx] = { x: +clamp(ip.x, 0, imgs.base.naturalWidth).toFixed(2), y: +clamp(ip.y, 0, imgs.base.naturalHeight).toFixed(2) };
+        doc.geoterra.boundary[drag.idx] = { x: +clamp(ip.x, 0, dims.w).toFixed(2), y: +clamp(ip.y, 0, dims.h).toFixed(2) };
       } else if (drag.m === 'moveGtVert') {
         if (!drag.pushed) { pushUndo('Move GeoTerra Vertex'); drag.pushed = true; }
-        doc.geoterra.features[drag.fi].points[drag.vi] = { x: +clamp(ip.x, 0, imgs.base.naturalWidth).toFixed(2), y: +clamp(ip.y, 0, imgs.base.naturalHeight).toFixed(2) };
+        doc.geoterra.features[drag.fi].points[drag.vi] = { x: +clamp(ip.x, 0, dims.w).toFixed(2), y: +clamp(ip.y, 0, dims.h).toFixed(2) };
       }
       draw();
     });
 
     function up(e) {
       delete ptrs[e.pointerId];
-      if (drag && drag.m === 'crop_base') {
-        var a1 = drag.p1, a2 = drag.p2; drag = null;
-        if (Math.hypot(a2.x - a1.x, a2.y - a1.y) >= 12) applyCropBaseRect(a1, a2);
-        draw(); return;
-      }
-      if (drag && drag.m === 'futsal_rect') {
-        var f1 = drag.p1, f2 = drag.p2; drag = null;
-        if (Math.hypot(f2.x - f1.x, f2.y - f1.y) >= 6) createFutsalFromRect(f1, f2);
-        draw(); return;
-      }
+      if (drag && drag.m === 'crop_base') { var a1 = drag.p1, a2 = drag.p2; drag = null; if (Math.hypot(a2.x - a1.x, a2.y - a1.y) >= 12) applyCropBaseRect(a1, a2); draw(); return; }
+      if (drag && drag.m === 'futsal_rect') { var f1 = drag.p1, f2 = drag.p2; drag = null; if (Math.hypot(f2.x - f1.x, f2.y - f1.y) >= 6) createFutsalFromRect(f1, f2); draw(); return; }
       if (drag && drag.m === 'gis_circle') {
         var cc = drag.c, ed = drag.edge; drag = null;
         var rPx = Math.hypot(ed.x - cc.x, ed.y - cc.y);
@@ -2199,14 +1926,11 @@ window.SOS = window.SOS || {};
           var poly = S.SatArcGIS.makeCirclePolygon(cc.x, cc.y, rPx, 48);
           var rM = doc.calibration.pxPerMeter > 0 ? (' (R ' + (rPx / doc.calibration.pxPerMeter).toFixed(1) + 'm)') : '';
           var cf = S.SatArcGIS.createFeature({ geom: 'polygon', category: doc.gis.activeCategory, name: 'Circle' + rM, points: poly });
-          doc.gis.features.push(cf); doc.layers.gis.visible = true; selGisIds = [cf.id];
-          persistToIDB(); syncUI();
+          doc.gis.features.push(cf); doc.layers.gis.visible = true; selGisIds = [cf.id]; persistToIDB(); syncUI();
         }
         draw(); return;
       }
-      if (drag && (drag.pushed || drag.m === 'clone' || drag.m === 'erase' || drag.m === 'brush')) {
-        persistToIDB(); syncUI();
-      }
+      if (drag && (drag.pushed || drag.m === 'clone' || drag.m === 'erase' || drag.m === 'brush')) { persistToIDB(); syncUI(); }
       if (!Object.keys(ptrs).length || (drag && drag.m === 'pinch')) drag = null;
     }
     cv.addEventListener('pointerup', up);
@@ -2215,8 +1939,7 @@ window.SOS = window.SOS || {};
       e.preventDefault();
       var p = posOf(e), before = s2i(p.x, p.y);
       view.s = clamp(view.s * (e.deltaY < 0 ? 1.14 : 0.87), minScale(), 16);
-      view.ox = p.x - before.x * view.s; view.oy = p.y - before.y * view.s;
-      draw();
+      view.ox = p.x - before.x * view.s; view.oy = p.y - before.y * view.s; draw();
     }, { passive: false });
   }
 
@@ -2231,8 +1954,7 @@ window.SOS = window.SOS || {};
     if (e.key === 'Escape') {
       calibDraft = { p1: null, p2: null }; bearingDraft = { p1: null, p2: null };
       measPts = []; cutPts = []; gisDraftPts = []; gtDraftPts = [];
-      cloneCfg.pickMode = false; driftFixPending = false;
-      setTool('select'); return;
+      cloneCfg.pickMode = false; driftFixPending = false; setTool('select'); return;
     }
     if (e.key === 'Enter') {
       if (tool === 'crop_asset' && cutPts.length >= 3) { e.preventDefault(); applyCropSelectedAsset(); return; }
@@ -2249,19 +1971,10 @@ window.SOS = window.SOS || {};
       if (cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
       if (gisDraftPts.length) { e.preventDefault(); gisDraftPts.pop(); syncUI(); draw(); return; }
       if (gtDraftPts.length) { e.preventDefault(); gtDraftPts.pop(); syncUI(); draw(); return; }
-      if (getSelPin() && tool === 'pin') {
-        e.preventDefault(); pushUndo('Delete Pin');
-        doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; });
-        selPinId = null; persistToIDB(); syncUI(); draw(); return;
-      }
-      if (selGisIds.length) {
-        e.preventDefault(); pushUndo('Delete GIS Features');
-        doc.gis.features = doc.gis.features.filter(function (f) { return selGisIds.indexOf(f.id) < 0; });
-        selGisIds = []; persistToIDB(); syncUI(); draw(); return;
-      }
+      if (getSelPin() && tool === 'pin') { e.preventDefault(); pushUndo('Delete Pin'); doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; }); selPinId = null; persistToIDB(); syncUI(); draw(); return; }
+      if (selGisIds.length) { e.preventDefault(); pushUndo('Delete GIS Features'); doc.gis.features = doc.gis.features.filter(function (f) { return selGisIds.indexOf(f.id) < 0; }); selGisIds = []; persistToIDB(); syncUI(); draw(); return; }
       if (getSelAsset()) { e.preventDefault(); deleteSelectedAsset(); return; }
     }
-    // Single-key Photoshop / ArcGIS shortcuts (when no modifier key is pressed)
     if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       var kMap = { v: 'select', h: 'pan', c: 'crop_asset', l: 'lasso_erase', w: 'wand', x: 'cutout', s: 'clone', e: 'erase', b: 'brush', i: 'eyedropper', p: 'poly_draw', m: 'measure' };
       var lk = e.key.toLowerCase();
@@ -2273,7 +1986,7 @@ window.SOS = window.SOS || {};
   function onKeyUp(e) { if (e.key === ' ') space = false; }
 
   // =========================================================================
-  // 11. UNIFIED UI BUILD, MENU ROUTER & SYNC (PHOTOSHOP + ARCGIS + GEOTERRA)
+  // 11. UNIFIED UI BUILD, MENU ROUTER & SYNC
   // =========================================================================
   function setTool(t) {
     tool = t;
@@ -2306,11 +2019,8 @@ window.SOS = window.SOS || {};
   function handleMenuAction(act) {
     if (!act) return;
     if (act.indexOf('tool:') === 0) { setTool(act.slice(5)); return; }
-    var fBase = ov.querySelector('#scFileBase');
-    var fClean = ov.querySelector('#scFileCleanup');
-    var fAsset = ov.querySelector('#scFileAsset');
-    var fGis = ov.querySelector('#scFileGis');
-    var fGt = ov.querySelector('#scFileGtJson');
+    var fBase = ov.querySelector('#scFileBase'), fClean = ov.querySelector('#scFileCleanup'), fAsset = ov.querySelector('#scFileAsset');
+    var fGis = ov.querySelector('#scFileGis'), fGt = ov.querySelector('#scFileGtJson');
 
     switch (act) {
       case 'import_base': fBase.value = ''; fBase.click(); break;
@@ -2327,7 +2037,7 @@ window.SOS = window.SOS || {};
       case 'export_gt_refsheet':
         if (S.SatGeoTerra) S.SatGeoTerra.generateReferenceSheetCanvas(buildGeoTerraOpts()).then(function (scv) {
           if (scv) scv.toBlob(function (b) { if (b) S.SatGeoTerra.triggerDownloadBlob(b, 'geoterra_ai_reference_sheet.png'); }, 'image/png');
-          else setStatus('Add at least one GeoTerra feature first.', true);
+          else alert('أضف معلماً واحداً على الأقل في GeoTerra أولاً.');
         });
         break;
       case 'undo': doUndo(); break;
@@ -2337,7 +2047,7 @@ window.SOS = window.SOS || {};
       case 'auto_tone': autoMatchSoilTone(); break;
       case 'clear_patches': if (doc.patches.length) { pushUndo('Clear Patches'); doc.patches = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
       case 'clear_erases': if (doc.cleanupErases.length) { pushUndo('Clear Erases'); doc.cleanupErases = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
-      case 'clear_sat': if (confirm('Clear ALL Sat Studio layers, GIS, GeoTerra & IndexedDB? (Main CAD stays untouched)')) clearData(false); break;
+      case 'clear_sat': if (confirm('Clear ALL Sat Studio layers, GIS, GeoTerra & IndexedDB?')) clearData(false); break;
       case 'fit': fitView(); break;
       case 'zoom_100': zoomNative100(); break;
       case 'toggle_left': if (wsCtrl) wsCtrl.toggleLeft(); break;
@@ -2364,15 +2074,13 @@ window.SOS = window.SOS || {};
       case 'cycle_coord_sys':
         var order = ['dd', 'dms', 'utm', 'mercator'];
         doc.gis.coordSys = order[(order.indexOf(doc.gis.coordSys) + 1) % order.length];
-        persistToIDB(); syncUI(); draw();
-        setStatus('Coordinate display switched to: ' + doc.gis.coordSys.toUpperCase(), false);
-        break;
+        persistToIDB(); syncUI(); draw(); break;
       case 'gis_cogo': runCogoInput(); break;
-      case 'gis_snap_toggle': doc.gis.snap.enabled = !doc.gis.snap.enabled; setStatus('GIS Snapping: ' + (doc.gis.snap.enabled ? 'ON' : 'OFF'), false); syncUI(); break;
+      case 'gis_snap_toggle': doc.gis.snap.enabled = !doc.gis.snap.enabled; syncUI(); break;
       case 'gis_merge': runGisBooleanOp('union'); break;
       case 'gis_clip': runGisBooleanOp('difference'); break;
       case 'gis_range_rings': runRangeRingsDialog(); break;
-      case 'gis_heatmap': doc.gis.showHeatmap = !doc.gis.showHeatmap; doc.layers.gis.visible = true; persistToIDB(); draw(); setStatus('GIS Heatmap: ' + (doc.gis.showHeatmap ? 'ON' : 'OFF'), false); break;
+      case 'gis_heatmap': doc.gis.showHeatmap = !doc.gis.showHeatmap; doc.layers.gis.visible = true; persistToIDB(); draw(); break;
       case 'gis_nearest': runNearestEvacMatrix(); break;
       case 'gis_spatial_query': runSpatialQueryPrompt(); break;
       case 'open_gt_panel':
@@ -2381,24 +2089,19 @@ window.SOS = window.SOS || {};
         if (gp) gp.scrollIntoView({ behavior: 'smooth', block: 'start' });
         break;
       case 'gt_gps_toggle': toggleLiveGps(); break;
-      case 'gt_gps_drift':
-        driftFixPending = true;
-        setStatus('DRIFT FIX: Click on the map where you are physically standing right now.', false);
-        break;
+      case 'gt_gps_drift': driftFixPending = true; setStatus('DRIFT FIX: Click where you are standing on map.', false); break;
       case 'gt_gps_track':
         ensureGpsCompassEngines();
         if (gpsEngine) {
-          if (gpsEngine.isRecordingTrack()) { gpsEngine.stopTrack(); setStatus('GPS Breadcrumb Track paused (' + gpsEngine.getTrack().length + ' pts).', false); }
-          else { if (!gpsEngine.isActive()) toggleLiveGps(); gpsEngine.startTrack(); setStatus('Recording GPS Breadcrumb Track...', false); }
+          if (gpsEngine.isRecordingTrack()) gpsEngine.stopTrack();
+          else { if (!gpsEngine.isActive()) toggleLiveGps(); gpsEngine.startTrack(); }
         }
         break;
       case 'gt_compass_toggle': toggleLiveCompass(); break;
       case 'sync_cad_north':
         var offN = (St && St.project && St.project.meta && St.project.meta.trueNorthOffsetDeg) || 0;
         pushUndo('Sync CAD North'); doc.overlays.northDeg = +Number(offN).toFixed(1);
-        persistToIDB(); syncUI(); draw();
-        setStatus('Synced North Arrow from AJ-GeoCAD (' + doc.overlays.northDeg + '°).', false);
-        break;
+        persistToIDB(); syncUI(); draw(); break;
       case 'push_gis_to_cad': pushFeaturesToCad(false); break;
       case 'send_to_3d': pushFeaturesToCad(true); break;
       case 'back_to_cad': close(); break;
@@ -2406,13 +2109,8 @@ window.SOS = window.SOS || {};
   }
 
   function buildExportPayload() {
-    return {
-      doc: doc, baseImg: imgs.base, assetImgs: imgs.assets,
-      siteName: (St && St.project && St.project.meta && St.project.meta.name) || 'Site',
-      renderCleanupTo: renderCleanupLayerTo
-    };
+    return { doc: doc, baseImg: imgs.base, assetImgs: imgs.assets, siteName: (St && St.project && St.project.meta && St.project.meta.name) || 'Site', renderCleanupTo: renderCleanupLayerTo };
   }
-
   function buildGeoTerraOpts() {
     return { state: doc.geoterra, baseImg: imgs.base, georefModel: georefModel, pxPerMeter: doc.calibration.pxPerMeter, lang: doc.lang };
   }
@@ -2437,21 +2135,15 @@ window.SOS = window.SOS || {};
     }).join('');
     [].forEach.call(box.querySelectorAll('[data-layeye]'), function (btn) {
       btn.onclick = function () {
-        var k = btn.dataset.layeye;
-        pushUndo('Toggle Layer ' + k);
-        doc.layers[k].visible = !doc.layers[k].visible;
-        persistToIDB(); syncUI(); draw();
+        var k = btn.dataset.layeye; pushUndo('Toggle Layer ' + k);
+        doc.layers[k].visible = !doc.layers[k].visible; persistToIDB(); syncUI(); draw();
       };
     });
   }
 
   function renderAssetInspector() {
-    var box = ov.querySelector('#scAssetInsp');
-    var a = getSelAsset();
-    if (!a) {
-      box.innerHTML = '<div class="mut">Select an asset on canvas or in Assets list to move, resize, rotate, crop, or blend.</div>';
-      return;
-    }
+    var box = ov.querySelector('#scAssetInsp'), a = getSelAsset();
+    if (!a) { box.innerHTML = '<div class="mut">Select an asset on canvas or list to edit.</div>'; return; }
     var ppm = doc.calibration.pxPerMeter || 0;
     var fl = a.filters || { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 };
     var prHtml = (S.SatBlending && S.SatBlending.PRESETS)
@@ -2464,7 +2156,7 @@ window.SOS = window.SOS || {};
       '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>Lock Aspect</label>' +
       '<div class="satc-grid2"><label>Rot (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>°)<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '"></label><label>Op (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label></div>' +
       '<div class="row"><button id="saFlipH">Flip H</button><button id="saFlipV">Flip V</button><button id="saLock">' + (a.locked ? 'Unlock' : 'Lock') + '</button></div>' +
-      '<div class="row"><button id="saUp">Up</button><button id="saDn">Down</button><button id="saDup" class="cy">Clone</button><button id="saAutoTone" class="on" title="Auto-match surrounding soil">Auto Tone</button></div>' +
+      '<div class="row"><button id="saUp">Up</button><button id="saDn">Down</button><button id="saDup" class="cy">Clone</button><button id="saAutoTone" class="on">Auto Tone</button></div>' +
       '<select id="saPreset"><option value="">-- Surface Blend Preset --</option>' + prHtml + '</select>' +
       '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>Shadow</label><label>Elev (m)<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
       '<label>Bright (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" value="' + fl.brightness + '"></label>' +
@@ -2477,8 +2169,7 @@ window.SOS = window.SOS || {};
     box.querySelector('#saName').onchange = function () { pushUndo('Rename Asset'); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
     box.querySelector('#saLockAsp').onchange = function () { a.lockAspect = !!this.checked; persistToIDB(); };
     function setD(nw, nh, ax) {
-      if (!(nw > 4) || !(nh > 4)) return;
-      pushUndo('Resize Asset');
+      if (!(nw > 4) || !(nh > 4)) return; pushUndo('Resize Asset');
       var asp = a.naturalW / Math.max(1, a.naturalH);
       if (a.lockAspect) { if (ax === 'w') nh = nw / asp; else nw = nh * asp; }
       a.wPx = +nw.toFixed(2); a.hPx = +nh.toFixed(2); persistToIDB(); syncUI(); draw();
@@ -2559,7 +2250,8 @@ window.SOS = window.SOS || {};
           onDelete: function (idx) { pushUndo('Delete GCP'); doc.geoterra.gcps.splice(idx, 1); recomputeGeoref(true); persistToIDB(); syncUI(); draw(); },
           onExportWorldFile: exportWorldFilePackage,
           onExportKmlOverlay: function () {
-            var kml = S.SatGeorefGPS.buildKmlGroundOverlay(georefModel, imgs.base.naturalWidth, imgs.base.naturalHeight, 'Master_Clean_2D.png', doc.overlays.titleEn || 'AJ-GeoCAD');
+            var d = getBaseDims();
+            var kml = S.SatGeorefGPS.buildKmlGroundOverlay(georefModel, d.w, d.h, 'Master_Clean_2D.png', doc.overlays.titleEn || 'AJ-GeoCAD');
             if (kml) downloadTextFile(kml, 'AJ_GeoCAD_Overlay.kml', 'application/vnd.google-earth.kml+xml');
           }
         }
@@ -2572,9 +2264,7 @@ window.SOS = window.SOS || {};
             return '<div class="satc-ait" data-hist="' + idx + '"><span>' + esc(lbl) + '</span><span class="satc-tag">Restore</span></div>';
           }).join('') + '</div>'
         : '<div class="mut">No history entries yet.</div>';
-      [].forEach.call(body.querySelectorAll('[data-hist]'), function (el) {
-        el.onclick = function () { jumpToHistoryIndex(+el.dataset.hist); };
-      });
+      [].forEach.call(body.querySelectorAll('[data-hist]'), function (el) { el.onclick = function () { jumpToHistoryIndex(+el.dataset.hist); }; });
     }
   }
 
@@ -2587,46 +2277,35 @@ window.SOS = window.SOS || {};
     if (imgs.base && doc.base.width) {
       bi.innerHTML = '<b>' + esc(doc.base.name || 'Satellite') + '</b><div>' + doc.base.width + '×' + doc.base.height + ' px (' + ((doc.base.width * doc.base.height) / 1e6).toFixed(2) + ' MP)</div>';
     } else {
-      bi.innerHTML = '<span class="mut">No base satellite image loaded.</span>';
+      bi.innerHTML = '<span class="mut">No base satellite image loaded yet.</span>';
     }
 
-    // Active Polygon/Crop/GIS Builder Box in Left Sub-Panel
     var bldBox = ov.querySelector('#scBuildBox');
     var activePts = (tool === 'cutout' || tool === 'crop_asset' || tool === 'lasso_erase') ? cutPts : ((tool === 'poly_draw' || tool === 'gis_line' || tool === 'gis_split') ? gisDraftPts : (tool === 'gt_survey' ? gtDraftPts : []));
     bldBox.style.display = (tool === 'cutout' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'poly_draw' || tool === 'gis_line' || tool === 'gis_split' || tool === 'gt_survey') ? 'flex' : 'none';
     ov.querySelector('#scBuildPtsV').textContent = String(activePts.length);
 
-    // GIS Category & Snap Sync
     if (ov.querySelector('#scGisCat')) ov.querySelector('#scGisCat').value = doc.gis.activeCategory || 'building';
     if (ov.querySelector('#scSnapOn')) ov.querySelector('#scSnapOn').checked = !!(doc.gis.snap && doc.gis.snap.enabled);
 
-    // Asset List
     var al = ov.querySelector('#scAssetList');
     al.innerHTML = doc.assets.length ? doc.assets.slice().reverse().map(function (a) {
-      return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '">' +
-        '<input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + '>' +
-        '<span>' + esc(a.name) + '</span></div>';
+      return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '"><input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + '><span>' + esc(a.name) + '</span></div>';
     }).join('') : '<div class="mut">No assets added yet.</div>';
     [].forEach.call(al.querySelectorAll('[data-aid]'), function (el) {
       el.onclick = function (ev) { if (ev.target.dataset && ev.target.dataset.avis) return; selAssetId = el.dataset.aid; syncUI(); draw(); };
     });
     [].forEach.call(al.querySelectorAll('[data-avis]'), function (cb) {
-      cb.onchange = function () {
-        for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === cb.dataset.avis) { doc.assets[i].visible = !!cb.checked; persistToIDB(); draw(); break; }
-      };
+      cb.onchange = function () { for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === cb.dataset.avis) { doc.assets[i].visible = !!cb.checked; persistToIDB(); draw(); break; } };
     });
 
     renderAssetInspector();
 
-    // Scale & North Calibration Sync
     var p1 = calibDraft.p1 || doc.calibration.p1, p2 = calibDraft.p2 || doc.calibration.p2;
-    ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0
-      ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m (1px=' + (100 / doc.calibration.pxPerMeter).toFixed(1) + 'cm)')
-      : 'Uncalibrated';
+    ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0 ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m') : 'Uncalibrated';
     ov.querySelector('#scCalPx').textContent = (p1 && p2) ? (Math.hypot(p2.x - p1.x, p2.y - p1.y).toFixed(1) + ' px') : 'Not picked';
     if (document.activeElement !== ov.querySelector('#scNorthDeg')) ov.querySelector('#scNorthDeg').value = doc.overlays.northDeg || 0;
 
-    // GeoTerra Panel Sync
     if (S.SatGeoTerra) {
       S.SatGeoTerra.renderGeoTerraPanel(ov.querySelector('#scGtPanel'), {
         state: doc.geoterra, lang: doc.lang, georefModel: georefModel, gpsStatus: gpsStatusTxt,
@@ -2645,9 +2324,8 @@ window.SOS = window.SOS || {};
           },
           onPushToArcGIS: function () {
             var added = S.SatGeoTerra.convertToArcGISFeatures(doc.geoterra);
-            if (!added.length) { setStatus('No GeoTerra features to push.', true); return; }
-            pushUndo('Push GeoTerra to ArcGIS');
-            added.forEach(function (f) { doc.gis.features.push(f); });
+            if (!added.length) { alert('لا توجد معالم GeoTerra للنقل.'); return; }
+            pushUndo('Push GeoTerra to ArcGIS'); added.forEach(function (f) { doc.gis.features.push(f); });
             doc.layers.gis.visible = true; persistToIDB(); syncUI(); draw();
             setStatus('Pushed ' + added.length + ' GeoTerra item(s) to ArcGIS layer.', false);
           },
@@ -2655,22 +2333,19 @@ window.SOS = window.SOS || {};
             var f = doc.geoterra.features[idx]; if (!f) return;
             var ctr = S.SatGeoTerra.polyAreaCentroidXY(f.points); panToImgPt(ctr.cx, ctr.cy); draw();
           },
-          onEditFeature: function (idx) {
-            var f = doc.geoterra.features[idx]; if (f) openGeoTerraModalFor(f.points, f.geometry, idx);
-          },
+          onEditFeature: function (idx) { var f = doc.geoterra.features[idx]; if (f) openGeoTerraModalFor(f.points, f.geometry, idx); },
           onDeleteFeature: function (idx) {
             if (!confirm('Delete GeoTerra feature?')) return;
-            pushUndo('Delete GeoTerra Feature'); doc.geoterra.features.splice(idx, 1);
-            persistToIDB(); syncUI(); draw();
+            pushUndo('Delete GeoTerra Feature'); doc.geoterra.features.splice(idx, 1); persistToIDB(); syncUI(); draw();
           }
         }
       });
     }
 
-    // Export Estimator Sync
     if (S.SatExport) {
-      var est = S.SatExport.estimateExport(doc.overlays, imgs.base ? imgs.base.naturalWidth : 0, imgs.base ? imgs.base.naturalHeight : 0);
-      ov.querySelector('#scRamEst').textContent = est.pw + '×' + est.ph + 'px (~' + Math.round(est.estPeakMB) + 'MB RAM) — ' + est.note;
+      var d = getBaseDims();
+      var est = S.SatExport.estimateExport(doc.overlays, d.w, d.h);
+      ov.querySelector('#scRamEst').textContent = est.pw + '×' + est.ph + 'px (~' + Math.round(est.estPeakMB) + 'MB RAM)';
       ov.querySelector('#scExpPoster').disabled = (est.level === 'block');
     }
 
@@ -2684,8 +2359,7 @@ window.SOS = window.SOS || {};
     var r = cv.parentNode.getBoundingClientRect();
     W = Math.max(1, r.width); H = Math.max(1, r.height);
     dpr = Math.min(window.devicePixelRatio || 1, 2);
-    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-    draw();
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); draw();
   }
 
   function build() {
@@ -2703,7 +2377,6 @@ window.SOS = window.SOS || {};
     ov.innerHTML =
       '<div class="satc-menubar" id="scMenuBar"></div>' +
       '<div class="satc-work">' +
-        // LEFT PHOTOSHOP ICON RAIL + LIVE GUIDE & TOOL OPTIONS
         '<aside class="satc-left">' +
           '<div class="satc-rail" id="scIconRail"></div>' +
           '<div class="satc-lsub">' +
@@ -2716,25 +2389,21 @@ window.SOS = window.SOS || {};
             '</div>' +
             '<div class="satc-card">' +
               '<b>Photo Brush, Clone &amp; Wand</b>' +
-              '<div class="satc-grid2">' +
-                '<label>Color<input type="color" id="scPhotoCol" value="#c5a267"></label>' +
-                '<label>Wand Tol (<span id="scPhotoTolV">28</span>)<input type="range" id="scPhotoTol" min="5" max="140" value="28"></label>' +
-              '</div>' +
+              '<div class="satc-grid2"><label>Color<input type="color" id="scPhotoCol" value="#c5a267"></label><label>Wand Tol (<span id="scPhotoTolV">28</span>)<input type="range" id="scPhotoTol" min="5" max="140" value="28"></label></div>' +
               '<label class="ck"><input type="checkbox" id="scPhotoCont" checked>Contiguous Wand</label>' +
-              '<label>Brush / Clone Radius (<span id="scRadV">28</span>px)<input type="range" id="scRad" min="4" max="180" value="28"></label>' +
-              '<label>Soft Feather (<span id="scFeaV">65</span>%)<input type="range" id="scFea" min="5" max="100" value="65"></label>' +
+              '<label>Radius (<span id="scRadV">28</span>px)<input type="range" id="scRad" min="4" max="180" value="28"></label>' +
+              '<label>Feather (<span id="scFeaV">65</span>%)<input type="range" id="scFea" min="5" max="100" value="65"></label>' +
               '<div class="satc-grid2"><button id="scPickSrc" class="cy">Pick Clone Src</button><button id="scAddPngBtn" class="on">+ PNG Asset</button></div>' +
             '</div>' +
             '<div class="satc-card">' +
-              '<b>ArcGIS Digitizing Options</b>' +
-              '<label>Active Category<select id="scGisCat">' + gisCatOpts + '</select></label>' +
+              '<b>ArcGIS Digitizing</b>' +
+              '<label>Category<select id="scGisCat">' + gisCatOpts + '</select></label>' +
               '<label class="ck"><input type="checkbox" id="scSnapOn" checked>Snapping (Vertex/Mid/Edge)</label>' +
               '<div class="satc-grid2"><button id="scCogoBtn" class="cy">COGO Dist+Brg</button><button id="scAttrBtn">Attribute Table</button></div>' +
             '</div>' +
           '</div>' +
         '</aside>' +
 
-        // CENTER STAGE + EDGE COLLAPSE BUTTONS + SWIPE + CLEAN FIELD BAR + BOTTOM DRAWER
         '<div class="satc-center">' +
           '<div class="satc-cvwrap">' +
             '<canvas id="scCv"></canvas>' +
@@ -2751,7 +2420,7 @@ window.SOS = window.SOS || {};
             '<div class="satc-btabs">' +
               '<button type="button" class="satc-btab on" data-btab="attr">ArcGIS Attribute Table</button>' +
               '<button type="button" class="satc-btab" data-btab="gcp">GCP Georef Link Table</button>' +
-              '<button type="button" class="satc-btab" data-btab="hist">History (Undo Stack)</button>' +
+              '<button type="button" class="satc-btab" data-btab="hist">History</button>' +
               '<span style="flex:1"></span>' +
               '<button type="button" class="satc-qbtn dng" id="scBotClose">×</button>' +
             '</div>' +
@@ -2759,19 +2428,15 @@ window.SOS = window.SOS || {};
           '</div>' +
         '</div>' +
 
-        // RIGHT DOCK: 6-LAYER ARCHITECTURE (WITH BASE TOGGLE) + SCALE + INSPECTOR + SUN + GEOTERRA + EXPORT
         '<aside class="satc-right">' +
           '<div class="satc-sec-h"><span>Layers (Independent Visibility)</span></div>' +
           '<div id="scLayersBox" style="display:flex;flex-direction:column;gap:4px"></div>' +
           '<div id="scBaseInfo" class="satc-card"></div>' +
 
-          '<div class="satc-sec-h"><span>Scale Bar &amp; True North Calibration</span></div>' +
+          '<div class="satc-sec-h"><span>Scale Bar &amp; True North</span></div>' +
           '<div class="satc-card">' +
             '<div>Scale: <b id="scCalStat">Uncalibrated</b> | Line: <b id="scCalPx">Not picked</b></div>' +
-            '<div class="satc-grid2">' +
-              '<label>Known (m)<input type="number" id="scCalM" step="0.1" value="10"></label>' +
-              '<label>North (°)<input type="number" id="scNorthDeg" step="0.5" value="0"></label>' +
-            '</div>' +
+            '<div class="satc-grid2"><label>Known (m)<input type="number" id="scCalM" step="0.1" value="10"></label><label>North (°)<input type="number" id="scNorthDeg" step="0.5" value="0"></label></div>' +
             '<div class="satc-grid2"><button id="scPickCal" class="cy">Pick 2-Pt Scale</button><button id="scApplyCal" class="on">Apply Scale</button></div>' +
             '<div class="satc-grid2"><button id="scPickBrg" class="amb">Calibrate North</button><button id="scResetCal" class="dng">Clear Scale</button></div>' +
           '</div>' +
@@ -2780,19 +2445,14 @@ window.SOS = window.SOS || {};
           '<div id="scAssetList" class="satc-alist"></div>' +
           '<div id="scAssetInsp" class="satc-card"></div>' +
 
-          '<div class="satc-sec-h"><span>Global Sun Shadow (Multiply)</span></div>' +
+          '<div class="satc-sec-h"><span>Global Sun Shadow</span></div>' +
           '<div class="satc-card">' +
-            '<div class="satc-grid2">' +
-              '<label>Azimuth (<span id="scSunAzV">135</span>°)<input type="range" id="scSunAz" min="0" max="359" value="135"></label>' +
-              '<label>Length (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label>' +
-            '</div>' +
-            '<div class="satc-grid2">' +
-              '<label>Opacity (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" value="38"></label>' +
-              '<label>Blur (<span id="scSunBlV">4</span>px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label>' +
-            '</div>' +
+            '<div class="satc-grid2"><label>Az (<span id="scSunAzV">135</span>°)<input type="range" id="scSunAz" min="0" max="359" value="135"></label><label>Len (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label></div>' +
+            '<div class="satc-grid2"><label>Op (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" value="38"></label><label>Blur (<span id="scSunBlV">4</span>px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label></div>' +
           '</div>' +
 
-          '<div class="satc-sec-h"><span>GeoTerra Field Survey (Linked)</span></div>' +
+          '<div class="satc-sec-h"><span>GeoTerra Field Survey</span></div>' +
+          '<button type="button" id="scImpGtDirect" class="satc-qbtn amb" style="width:100%">⬆️ استيراد جلسة GeoTerra (.json / .zip)</button>' +
           '<div id="scGtPanel"></div>' +
 
           '<div class="satc-sec-h"><span>Print Poster &amp; Dual Export</span></div>' +
@@ -2808,48 +2468,39 @@ window.SOS = window.SOS || {};
       '</div>' +
       '<div class="satc-foot">' +
         '<span id="scStatus">' + esc(statusMsg) + '</span>' +
-        '<span class="satc-fchip" id="scFootCoord" title="Click to switch DD / DMS / UTM 36N">CRS: DD</span>' +
-        '<span class="satc-fchip" id="scFootGps" title="Click to toggle Live GPS">GPS: OFF</span>' +
-        '<span class="satc-fchip" id="scFootCmp" title="Click to toggle Live Compass">🧭 OFF</span>' +
+        '<span class="satc-fchip" id="scFootCoord">CRS: DD</span>' +
+        '<span class="satc-fchip" id="scFootGps">GPS: OFF</span>' +
+        '<span class="satc-fchip" id="scFootCmp">🧭 OFF</span>' +
         '<span id="scIdb">IDB: ' + esc(idbStatus) + '</span>' +
       '</div>' +
       '<input type="file" id="scFileBase" accept="image/*" hidden>' +
       '<input type="file" id="scFileCleanup" accept="image/*" hidden>' +
       '<input type="file" id="scFileAsset" accept="image/*" multiple hidden>' +
-      '<input type="file" id="scFileGis" accept=".geojson,.json,.kml,.gpx,.csv" hidden>' +
-      '<input type="file" id="scFileGtJson" accept=".json,application/json" hidden>';
+      '<input type="file" id="scFileGis" hidden>' +
+      '<input type="file" id="scFileGtJson" hidden>';
 
     document.body.appendChild(ov);
-    cv = ov.querySelector('#scCv');
-    ctx = cv.getContext('2d');
-    bindCanvas();
+    cv = ov.querySelector('#scCv'); ctx = cv.getContext('2d'); bindCanvas();
 
     if (S.SatThemeUI) {
       menuCtrl = S.SatThemeUI.buildMenuBar(ov.querySelector('#scMenuBar'), { lang: doc.lang, onAction: handleMenuAction });
       railCtrl = S.SatThemeUI.buildLeftIconRail(ov.querySelector('#scIconRail'), {
-        lang: doc.lang,
-        onSelectTool: setTool,
-        onHoverTool: function (tid) {
-          S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, doc.lang);
-        }
+        lang: doc.lang, onSelectTool: setTool,
+        onHoverTool: function (tid) { S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, doc.lang); }
       });
       S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, doc.lang);
       wsCtrl = S.SatThemeUI.createWorkspaceController(ov, { onResize: resize, onSwipeChange: draw });
     }
 
-    // Wire Hidden File Inputs
     ov.querySelector('#scFileBase').onchange = function () { if (this.files[0]) importBaseFile(this.files[0]); };
     ov.querySelector('#scFileCleanup').onchange = function () { if (this.files[0]) importCleanupFile(this.files[0]); };
     ov.querySelector('#scFileAsset').onchange = function () { if (this.files.length) importAssetFiles(this.files); };
     ov.querySelector('#scFileGis').onchange = function () { if (this.files[0]) importGISFile(this.files[0]); };
     ov.querySelector('#scFileGtJson').onchange = function () { if (this.files[0]) importGeoTerraJsonFile(this.files[0]); };
+    ov.querySelector('#scImpGtDirect').onclick = function () { handleMenuAction('import_gt_json'); };
 
-    // Wire Left Options
     ov.querySelector('#scCutFea').oninput = function () { cutFeatherPx = +this.value; ov.querySelector('#scCutFeaV').textContent = this.value; };
-    ov.querySelector('#scBuildUndo').onclick = function () {
-      if (cutPts.length) cutPts.pop(); else if (gisDraftPts.length) gisDraftPts.pop(); else if (gtDraftPts.length) gtDraftPts.pop();
-      syncUI(); draw();
-    };
+    ov.querySelector('#scBuildUndo').onclick = function () { if (cutPts.length) cutPts.pop(); else if (gisDraftPts.length) gisDraftPts.pop(); else if (gtDraftPts.length) gtDraftPts.pop(); syncUI(); draw(); };
     ov.querySelector('#scBuildCan').onclick = function () { cutPts = []; gisDraftPts = []; gtDraftPts = []; setTool('select'); };
     ov.querySelector('#scBuildExec').onclick = function () {
       if (tool === 'crop_asset') applyCropSelectedAsset();
@@ -2870,14 +2521,12 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scCogoBtn').onclick = runCogoInput;
     ov.querySelector('#scAttrBtn').onclick = function () { openBottomTab('attr'); };
 
-    // Wire Clean Bar & Bottom Drawer Tabs
     ov.querySelector('#scExitClean').onclick = function () { if (wsCtrl) wsCtrl.toggleCleanMode(false); };
     ov.querySelector('#scCleanGps').onclick = dropGpsPointNow;
     ov.querySelector('#scCleanUndo').onclick = doUndo;
     [].forEach.call(ov.querySelectorAll('[data-btab]'), function (b) { b.onclick = function () { openBottomTab(b.dataset.btab); }; });
     ov.querySelector('#scBotClose').onclick = function () { if (wsCtrl && wsCtrl.state.bottomOpen) wsCtrl.toggleBottom(); };
 
-    // Wire Right Scale, Sun, Export & 3D Bridge
     ov.querySelector('#scPickCal').onclick = function () { calibDraft = { p1: null, p2: null }; setTool('calibrate'); };
     ov.querySelector('#scApplyCal').onclick = function () { applyCalibration(ov.querySelector('#scCalM').value); };
     ov.querySelector('#scPickBrg').onclick = function () { bearingDraft = { p1: null, p2: null }; setTool('bearing_cal'); };
@@ -2889,10 +2538,8 @@ window.SOS = window.SOS || {};
       el.oninput = function () { var r = flt ? parseFloat(this.value) : (+this.value); doc.sun[k] = div ? (r / div) : r; ov.querySelector(vid).textContent = this.value; draw(); };
       el.onchange = function () { persistToIDB(); };
     }
-    bSun('#scSunAz', '#scSunAzV', 'azimuthDeg', 0, false);
-    bSun('#scSunLen', '#scSunLenV', 'lengthFactor', 0, true);
-    bSun('#scSunOp', '#scSunOpV', 'opacity', 100, false);
-    bSun('#scSunBl', '#scSunBlV', 'blurPx', 0, true);
+    bSun('#scSunAz', '#scSunAzV', 'azimuthDeg', 0, false); bSun('#scSunLen', '#scSunLenV', 'lengthFactor', 0, true);
+    bSun('#scSunOp', '#scSunOpV', 'opacity', 100, false); bSun('#scSunBl', '#scSunBlV', 'blurPx', 0, true);
 
     if (S.SatExport) {
       ov.querySelector('#scPaper').innerHTML = Object.keys(S.SatExport.PAPERS).map(function (k) {
@@ -2908,7 +2555,6 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scPushCad').onclick = function () { pushFeaturesToCad(false); };
     ov.querySelector('#scSend3D').onclick = function () { pushFeaturesToCad(true); };
 
-    // Footer Quick Chips
     ov.querySelector('#scFootCoord').onclick = function () { handleMenuAction('cycle_coord_sys'); };
     ov.querySelector('#scFootGps').onclick = toggleLiveGps;
     ov.querySelector('#scFootCmp').onclick = toggleLiveCompass;
@@ -2919,7 +2565,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 12. PUBLIC ISOLATED MODULE API (100% COMPATIBLE WITH state.js)
+  // 12. PUBLIC ISOLATED MODULE API
   // =========================================================================
   function open() {
     try {
@@ -2927,13 +2573,11 @@ window.SOS = window.SOS || {};
       isOpen = true;
       ov.classList.remove('hide');
       resize();
-      if (imgs.base && view.s === 1 && view.ox === 0 && view.oy === 0) fitView();
+      if (getBaseDims().w && view.s === 1 && view.ox === 0 && view.oy === 0) fitView();
       syncUI(); draw();
       document.addEventListener('keydown', onKeyDown);
       document.addEventListener('keyup', onKeyUp);
-    } catch (err) {
-      alert('Sat Studio failed to open: ' + err.message);
-    }
+    } catch (err) { alert('Sat Studio failed to open: ' + err.message); }
   }
 
   function close() {
@@ -2955,17 +2599,11 @@ window.SOS = window.SOS || {};
 
   function exportState(opts) {
     try {
-      var includeHeavy = !opts || opts.includeHeavy !== false;
-      var activeAssetBins = {};
-      if (includeHeavy) {
-        doc.assets.forEach(function (a) { if (a.binId && bins.assets[a.binId]) activeAssetBins[a.binId] = bins.assets[a.binId]; });
-      }
+      var includeHeavy = !opts || opts.includeHeavy !== false, activeAssetBins = {};
+      if (includeHeavy) doc.assets.forEach(function (a) { if (a.binId && bins.assets[a.binId]) activeAssetBins[a.binId] = bins.assets[a.binId]; });
       return {
-        version: 2,
-        doc: JSON.parse(JSON.stringify(doc)),
-        bins: includeHeavy
-          ? { base: bins.base, cleanup: hasActiveCleanupImg() ? bins.cleanup : null, assets: activeAssetBins }
-          : { base: null, cleanup: null, assets: {} }
+        version: 2, doc: JSON.parse(JSON.stringify(doc)),
+        bins: includeHeavy ? { base: bins.base, cleanup: hasActiveCleanupImg() ? bins.cleanup : null, assets: activeAssetBins } : { base: null, cleanup: null, assets: {} }
       };
     } catch (err) { return null; }
   }
@@ -2975,8 +2613,7 @@ window.SOS = window.SOS || {};
       if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       if (S.SatProcedural && S.SatProcedural.clearProceduralCache) S.SatProcedural.clearProceduralCache();
       if (!payload || typeof payload !== 'object') return false;
-      opGen++;
-      var snapGen = opGen;
+      opGen++; var snapGen = opGen;
       undoStack = []; redoStack = [];
       selAssetId = null; selPinId = null; selGisIds = []; cutPts = []; gisDraftPts = []; gtDraftPts = [];
       doc = mergeDoc(payload.doc || payload);
@@ -2998,8 +2635,7 @@ window.SOS = window.SOS || {};
     try {
       if (S.SatBlending && S.SatBlending.clearCache) S.SatBlending.clearCache();
       if (S.SatProcedural && S.SatProcedural.clearProceduralCache) S.SatProcedural.clearProceduralCache();
-      opGen++;
-      doc = blankDoc(); bins = blankBins(); imgs = { base: null, cleanup: null, assets: {} };
+      opGen++; doc = blankDoc(); bins = blankBins(); imgs = { base: null, cleanup: null, assets: {} };
       if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
       cleanupDirty = true; undoStack = []; redoStack = [];
       selAssetId = null; selPinId = null; selGisIds = []; cutPts = []; gisDraftPts = []; gtDraftPts = []; measPts = [];
@@ -3007,7 +2643,7 @@ window.SOS = window.SOS || {};
       georefModel = null; viewshedResult = null; rangeRingsState = null; evacMatrixLinks = [];
       cloneCfg.src = null; cloneCfg.pickMode = false;
       wipeIDB();
-      if (!silent) setStatus('Sat Studio data & local IndexedDB cleared.', false);
+      if (!silent) setStatus('Sat Studio cleared.', false);
       if (isOpen) { syncUI(); draw(); }
     } catch (err) {}
   }
@@ -3022,6 +2658,8 @@ window.SOS = window.SOS || {};
     hasData: hasData,
     exportState: exportState,
     importState: importState,
-    clearData: clearData
+    clearData: clearData,
+    importGeoTerraFile: importGeoTerraJsonFile,
+    importGeoTerraData: applyParsedGeoTerraData
   };
 })(window.SOS);
