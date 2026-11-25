@@ -654,7 +654,6 @@ window.SOS = window.SOS || {};
     if (parsed.metersPerPixel > 0) doc.calibration.pxPerMeter = +(1 / parsed.metersPerPixel).toFixed(5);
     doc.layers.geoterra.visible = true;
 
-    // Ensure virtual canvas dimensions exist even before Base Satellite photo is loaded
     if (!imgs.base) {
       var wEst = (+dataObj.imageWidth) || 0, hEst = (+dataObj.imageHeight) || 0;
       if (!(wEst > 0 && hEst > 0)) {
@@ -1411,6 +1410,7 @@ window.SOS = window.SOS || {};
     ctx.restore();
   }
 
+  // === END PART 1 / 2 ===
   // =========================================================================
   // 9. CALIBRATION, GIS TOPOLOGY, GEOPROCESSING, GEOTERRA & 3D/CAD BRIDGE
   // =========================================================================
