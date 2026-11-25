@@ -77,7 +77,8 @@ window.SOS = window.SOS || {};
   var view = { s: 1, ox: 0, oy: 0 };
   var menuCtrl = null, railCtrl = null, wsCtrl = null;
   var tool = 'select';
-  var selAssetId = null, selPinId = null, selGisIds = [], pinCat = 'bldg';
+  var selAssetId = null, selPinId = null, selGisIds = [], selGtIdx = -1, pinCat = 'bldg';
+  var quickMoveArmed = false, quickPopEl = null;
   var ptrs = {}, drag = null, space = false, hovImg = null, snapPreview = null;
   var calibDraft = { p1: null, p2: null }, bearingDraft = { p1: null, p2: null };
   var measPts = [], cutPts = [], gisDraftPts = [], gtDraftPts = [];
@@ -280,6 +281,8 @@ window.SOS = window.SOS || {};
     if (selAssetId && !getSelAsset()) selAssetId = null;
     if (selPinId && !getSelPin()) selPinId = null;
     selGisIds = selGisIds.filter(function (id) { return !!getGisById(id); });
+    if (selGtIdx >= (doc.geoterra.features || []).length) selGtIdx = -1;
+    quickMoveArmed = false;
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
     recomputeGeoref(false);
     cleanupDirty = true;
@@ -352,6 +355,8 @@ window.SOS = window.SOS || {};
   function getSelAsset() { for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === selAssetId) return doc.assets[i]; return null; }
   function getSelPin() { var ps = (doc.overlays && doc.overlays.pins) || []; for (var i = 0; i < ps.length; i++) if (ps[i].id === selPinId) return ps[i]; return null; }
   function getGisById(id) { var fs = (doc.gis && doc.gis.features) || []; for (var i = 0; i < fs.length; i++) if (fs[i].id === id) return fs[i]; return null; }
+  function getSelGt() { return (selGtIdx >= 0 && doc.geoterra && doc.geoterra.features && doc.geoterra.features[selGtIdx]) ? doc.geoterra.features[selGtIdx] : null; }
+  function clearAllSelections() { selAssetId = null; selPinId = null; selGisIds = []; selGtIdx = -1; quickMoveArmed = false; }
 
   // =========================================================================
   // 3. GEOREFERENCING, LIVE GPS & COMPASS BRIDGE
@@ -489,7 +494,7 @@ window.SOS = window.SOS || {};
     } else {
       pushUndo('GPS GIS Point');
       var f = S.SatArcGIS.createFeature({ geom: 'point', category: doc.gis.activeCategory, name: 'GPS Point', points: [pt], notes: 'GPS ±' + Math.round(accM || 0) + 'm' });
-      doc.gis.features.push(f); selGisIds = [f.id];
+      doc.gis.features.push(f); clearAllSelections(); selGisIds = [f.id];
     }
     panToImgPt(pt.x, pt.y); persistToIDB(); syncUI(); draw();
     setStatus('Dropped GPS point at ' + lat.toFixed(6) + ', ' + lon.toFixed(6), false);
@@ -565,7 +570,7 @@ window.SOS = window.SOS || {};
               source: 'png', naturalW: im.naturalWidth, naturalH: im.naturalHeight,
               x: +ctr.x.toFixed(2), y: +ctr.y.toFixed(2), wPx: +wPx.toFixed(2), hPx: +(wPx / asp).toFixed(2)
             });
-            doc.assets.push(ast); doc.layers.assets.visible = true; selAssetId = ast.id; addedCount++;
+            doc.assets.push(ast); doc.layers.assets.visible = true; clearAllSelections(); selAssetId = ast.id; addedCount++;
           }
           doneCount++; checkDone();
         });
@@ -701,7 +706,7 @@ window.SOS = window.SOS || {};
         try {
           var ext = extractGeoTerraFromZip(rz.result);
           if (!ext || !ext.data) {
-            alert('تعذّر استخراج project_ai.json من هذا الـ ZIP (تأكد أنه ملف حزمة GeoTerra أو استخرج ملف .json منه).');
+            alert('تعذّر استخراج project_ai.json من هذا الـ ZIP.');
             return;
           }
           applyParsedGeoTerraData(ext.data, ext.mapPngUrl);
@@ -897,7 +902,7 @@ window.SOS = window.SOS || {};
       var binId = uid('cut'); bins.assets[binId] = pngUrl; imgs.assets[binId] = im;
       var cnt = doc.assets.filter(function (a) { return a.source === 'cutout'; }).length + 1;
       var ast = normalizeAsset({ id: uid('ast'), binId: binId, name: 'Cutout #' + cnt + ' (A➔B)', source: 'cutout', naturalW: bw, naturalH: bh, x: +(x0 + bw / 2).toFixed(2), y: +(y0 + bh / 2).toFixed(2), wPx: bw, hPx: bh });
-      doc.assets.push(ast); doc.layers.assets.visible = true; selAssetId = ast.id; cutPts = [];
+      doc.assets.push(ast); doc.layers.assets.visible = true; clearAllSelections(); selAssetId = ast.id; cutPts = [];
       persistToIDB(); setTool('select'); syncUI(); draw();
     });
   }
@@ -914,7 +919,7 @@ window.SOS = window.SOS || {};
         rotationDeg: +(((rotDeg || 0) % 360 + 360) % 360).toFixed(1),
         elevationM: elevM != null ? elevM : 3.0, shadowEnabled: castSh !== false
       });
-      doc.assets.push(ast); doc.layers.assets.visible = true; selAssetId = ast.id;
+      doc.assets.push(ast); doc.layers.assets.visible = true; clearAllSelections(); selAssetId = ast.id;
       persistToIDB(); setTool('select'); syncUI(); draw();
     });
   }
@@ -1051,7 +1056,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 7. VIEWPORT PROJECTION & HIT-TESTING
+  // 7. VIEWPORT PROJECTION & HIT-TESTING (ASSETS, PINS, ARCGIS, GEOTERRA)
   // =========================================================================
   function i2s(ix, iy) { return [view.ox + ix * view.s, view.oy + iy * view.s]; }
   function s2i(sx, sy) { return { x: (sx - view.ox) / view.s, y: (sy - view.oy) / view.s }; }
@@ -1069,6 +1074,17 @@ window.SOS = window.SOS || {};
     var d = getBaseDims(); if (!d.w) return;
     var ctr = s2i(W / 2, H / 2); view.s = 1;
     view.ox = W / 2 - ctr.x; view.oy = H / 2 - ctr.y; draw();
+  }
+
+  function pointInPolyLocal(pt, poly) {
+    if (!poly || poly.length < 3) return false;
+    if (S.SatArcGIS && S.SatArcGIS.pointInPolygon) return S.SatArcGIS.pointInPolygon(pt, poly);
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if (((yi > pt.y) !== (yj > pt.y)) && (pt.x < (xj - xi) * (pt.y - yi) / ((yj - yi) || 1e-12) + xi)) inside = !inside;
+    }
+    return inside;
   }
 
   function assetLocalToImg(a, lx, ly) {
@@ -1092,14 +1108,14 @@ window.SOS = window.SOS || {};
     var hs = assetHandlesImg(a), keys = ['rot', 'tl', 'tr', 'br', 'bl'];
     for (var i = 0; i < keys.length; i++) {
       var sp = i2s(hs[keys[i]].x, hs[keys[i]].y);
-      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 12) return keys[i];
+      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 13) return keys[i];
     }
     return null;
   }
   function hitAssetAt(imgPt) {
     if (!doc.layers.assets.visible) return null;
     for (var i = doc.assets.length - 1; i >= 0; i--) {
-      var a = doc.assets[i]; if (!a.visible || a.locked) continue;
+      var a = doc.assets[i]; if (!a.visible) continue;
       var loc = imgToAssetLocal(a, imgPt.x, imgPt.y);
       if (Math.abs(loc.x) <= a.wPx / 2 && Math.abs(loc.y) <= a.hPx / 2) return a;
     }
@@ -1110,7 +1126,7 @@ window.SOS = window.SOS || {};
     var ps = (doc.overlays && doc.overlays.pins) || [];
     for (var i = ps.length - 1; i >= 0; i--) {
       var sp = i2s(ps[i].x, ps[i].y);
-      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 15) return ps[i];
+      if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 16) return ps[i];
     }
     return null;
   }
@@ -1121,23 +1137,40 @@ window.SOS = window.SOS || {};
       var f = fs[i]; if (!f.visible || !f.points.length) continue;
       if (f.geom === 'point' || f.points.length === 1) {
         var sp = i2s(f.points[0].x, f.points[0].y);
-        if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 12) return f;
+        if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 15) return f;
       } else if (f.geom === 'polygon' || f.geom === 'circle') {
-        if (S.SatArcGIS.pointInPolygon(imgPt, f.points)) return f;
+        if (pointInPolyLocal(imgPt, f.points)) return f;
       } else if (f.geom === 'polyline') {
         for (var k = 0; k < f.points.length - 1; k++) {
           var sA = i2s(f.points[k].x, f.points[k].y), sB = i2s(f.points[k + 1].x, f.points[k + 1].y);
           var dx = sB[0] - sA[0], dy = sB[1] - sA[1], l2 = dx * dx + dy * dy || 1;
           var t = clamp(((screenPt.x - sA[0]) * dx + (screenPt.y - sA[1]) * dy) / l2, 0, 1);
-          if (Math.hypot(screenPt.x - (sA[0] + dx * t), screenPt.y - (sA[1] + dy * t)) <= 10) return f;
+          if (Math.hypot(screenPt.x - (sA[0] + dx * t), screenPt.y - (sA[1] + dy * t)) <= 12) return f;
         }
       }
     }
     return null;
   }
+  function hitGeoTerraAt(imgPt, screenPt) {
+    if (!doc.layers.geoterra.visible || !doc.geoterra || !doc.geoterra.features) return -1;
+    var fs = doc.geoterra.features;
+    for (var i = fs.length - 1; i >= 0; i--) {
+      var f = fs[i];
+      if (!f || !f.points || !f.points.length) continue;
+      if (doc.geoterra.filters && doc.geoterra.filters[f.type] === false) continue;
+      if (f.geometry === 'point' || f.points.length === 1) {
+        if (doc.geoterra.filters && doc.geoterra.filters.pins === false) continue;
+        var sp = i2s(f.points[0].x, f.points[0].y);
+        if (Math.hypot(screenPt.x - sp[0], screenPt.y - sp[1]) <= 16) return i;
+      } else if (f.points.length >= 3) {
+        if (pointInPolyLocal(imgPt, f.points)) return i;
+      }
+    }
+    return -1;
+  }
 
   // =========================================================================
-  // 8. MAIN 6-LAYER RENDERER + SWIPE + INTERACTIVE OVERLAYS
+  // 8. MAIN 6-LAYER RENDERER + SWIPE + SELECTION HIGHLIGHT
   // =========================================================================
   function drawEditedLayers(iw, ih, tl, dw, dh) {
     if (doc.layers.cleanup.visible && imgs.base) {
@@ -1195,6 +1228,7 @@ window.SOS = window.SOS || {};
         ctx.fillText('AJ-GeoCAD STUDIO — PHOTOSHOP + ArcGIS + GEOTERRA', W / 2, H / 2 - 12);
         ctx.font = '10.5px ' + MONO;
         ctx.fillText('ملف ➔ استيراد خريطة الأساس  |  أو استيراد جلسة GeoTerra (.json / .zip)', W / 2, H / 2 + 12);
+        positionQuickPop();
         return;
       }
 
@@ -1223,6 +1257,25 @@ window.SOS = window.SOS || {};
 
       ctx.strokeStyle = isDay ? '#0369a1' : '#1f3b52'; ctx.lineWidth = 1.4;
       ctx.strokeRect(tl[0], tl[1], dw, dh);
+
+      // Highlight Selected GeoTerra Feature
+      var selGt = getSelGt();
+      if (selGt && doc.layers.geoterra.visible && selGt.points && selGt.points.length) {
+        ctx.save();
+        ctx.strokeStyle = quickMoveArmed ? '#e8c84a' : '#39ff14';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        if (selGt.geometry === 'point' || selGt.points.length === 1) {
+          var gsp0 = i2s(selGt.points[0].x, selGt.points[0].y);
+          ctx.beginPath(); ctx.arc(gsp0[0], gsp0[1], 14, 0, Math.PI * 2); ctx.stroke();
+        } else {
+          ctx.beginPath();
+          selGt.points.forEach(function (pt, idx) { var sp = i2s(pt.x, pt.y); if (idx === 0) ctx.moveTo(sp[0], sp[1]); else ctx.lineTo(sp[0], sp[1]); });
+          ctx.closePath(); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
 
       var sel = getSelAsset();
       if (sel && doc.layers.assets.visible && (tool === 'select' || tool === 'pan' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'wand')) drawAssetGizmo(sel);
@@ -1265,6 +1318,7 @@ window.SOS = window.SOS || {};
 
       if (doc.showScaleBar && doc.calibration.pxPerMeter > 0) drawScaleBar(isDay);
       drawViewportHud(isDay, dims);
+      positionQuickPop();
     } catch (err) {
       setStatus('Render warning: ' + err.message, true);
     }
@@ -1412,7 +1466,223 @@ window.SOS = window.SOS || {};
 
   // === END PART 1 / 2 ===
   // =========================================================================
-  // 9. CALIBRATION, GIS TOPOLOGY, GEOPROCESSING, GEOTERRA & 3D/CAD BRIDGE
+  // 9. FLOATING QUICK MENU (EDIT / MOVE / VERTICES / CLONE / DELETE)
+  // =========================================================================
+  var quickVertsArmed = false;
+
+  function ensureQuickPopCss() {
+    if (document.getElementById('aj-sat-qpop-css')) return;
+    var st = document.createElement('style');
+    st.id = 'aj-sat-qpop-css';
+    st.textContent =
+      '.satc-qpop{position:absolute;z-index:32;display:none;flex-direction:column;gap:4px;min-width:190px;max-width:calc(100% - 16px);' +
+        'background:rgba(8,14,24,.95);border:1.5px solid var(--sc-cyan,#00e5ff);border-radius:8px;padding:6px 7px;' +
+        'box-shadow:0 8px 26px rgba(0,0,0,.68);backdrop-filter:blur(4px);user-select:none}' +
+      'body.ui-day .satc-qpop{background:rgba(255,255,255,.97);border-color:#0369a1;box-shadow:0 8px 22px rgba(15,23,42,.22)}' +
+      '.satc-qpop.show{display:flex}' +
+      '.satc-qpop-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10.5px;font-weight:700;color:var(--sc-green2,#00ff66);border-bottom:1px solid var(--sc-border,#15222e);padding-bottom:3px}' +
+      'body.ui-day .satc-qpop-hd{color:#15803d}' +
+      '.satc-qpop-hd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:195px}' +
+      '.satc-qpop-row{display:flex;flex-wrap:wrap;gap:4px}' +
+      '.satc-qpop-btn{flex:1 1 auto;min-height:28px;padding:4px 7px;border-radius:5px;border:1px solid var(--sc-border-hi,#1f3b52)!important;' +
+        'background:var(--sc-input,#06090e)!important;color:var(--sc-txt,#d9ecff)!important;font-family:' + MONO + ';font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:none!important}' +
+      'body.ui-day .satc-qpop-btn{background:#f8fafc!important;color:#0f172a!important;border-color:#94a3b8!important}' +
+      '.satc-qpop-btn.on{border-color:var(--sc-green2,#00ff66)!important;color:var(--sc-green2,#00ff66)!important;background:rgba(0,255,102,.14)!important}' +
+      '.satc-qpop-btn.amb{border-color:var(--sc-amber,#e8c84a)!important;color:var(--sc-amber,#e8c84a)!important;background:rgba(232,200,74,.14)!important}' +
+      '.satc-qpop-btn.dng{border-color:var(--sc-red,#ff3c3c)!important;color:var(--sc-red,#ff3c3c)!important;background:rgba(255,60,60,.14)!important}';
+    document.head.appendChild(st);
+  }
+
+  function getActiveSelectionTarget() {
+    if (tool !== 'select' && tool !== 'pin') return null;
+    var p = getSelPin();
+    if (p) return { kind: 'pin', item: p, label: (p.labelAr || p.labelEn || 'Pin'), anchorImg: { x: p.x, y: p.y }, isPoly: false };
+    var a = getSelAsset();
+    if (a) return { kind: 'asset', item: a, label: a.name || 'Asset', anchorImg: { x: a.x, y: a.y - a.hPx / 2 }, isPoly: false, locked: !!a.locked };
+    var gt = getSelGt();
+    if (gt && gt.points && gt.points.length) {
+      var gc = S.SatGeoTerra ? S.SatGeoTerra.polyAreaCentroidXY(gt.points) : { cx: gt.points[0].x, cy: gt.points[0].y };
+      return { kind: 'geoterra', item: gt, idx: selGtIdx, label: gt.id + (gt.name ? (' · ' + gt.name) : ''), anchorImg: { x: gc.cx, y: gc.cy }, isPoly: gt.points.length >= 2 };
+    }
+    var g = selGisIds.length ? getGisById(selGisIds[0]) : null;
+    if (g && g.points && g.points.length) {
+      var st = S.SatArcGIS ? S.SatArcGIS.polyStats(g.points, doc.calibration.pxPerMeter) : { cx: g.points[0].x, cy: g.points[0].y };
+      return { kind: 'gis', item: g, label: g.name || g.id, anchorImg: { x: st.cx, y: st.cy }, isPoly: g.points.length >= 2 };
+    }
+    return null;
+  }
+
+  function drawQuickVertexHandles(target) {
+    if (!ctx || !quickVertsArmed || !target || !target.isPoly || !target.item.points) return;
+    ctx.save();
+    target.item.points.forEach(function (pt, idx) {
+      var sp = i2s(pt.x, pt.y);
+      ctx.beginPath();
+      ctx.arc(sp[0], sp[1], 7, 0, Math.PI * 2);
+      ctx.fillStyle = '#e8c84a';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#06090e';
+      ctx.stroke();
+      ctx.fillStyle = '#06090e';
+      ctx.font = 'bold 9px ' + MONO;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(idx + 1), sp[0], sp[1] + 0.5);
+    });
+    ctx.restore();
+  }
+
+  function editSelectedTarget(t) {
+    if (!t) return;
+    if (t.kind === 'geoterra') {
+      openGeoTerraModalFor(t.item.points, t.item.geometry, t.idx);
+    } else if (t.kind === 'gis') {
+      var nm = prompt(doc.lang === 'ar' ? 'اسم المعلم:' : 'Feature Name:', t.item.name || '');
+      if (nm === null) return;
+      var nt = prompt(doc.lang === 'ar' ? 'ملاحظات المعلم:' : 'Feature Notes:', t.item.notes || '');
+      pushUndo('Edit GIS Feature');
+      t.item.name = nm.trim() || t.item.name;
+      if (nt !== null) t.item.notes = nt.trim();
+      persistToIDB(); syncUI(); draw();
+    } else if (t.kind === 'pin') {
+      var ar = prompt(doc.lang === 'ar' ? 'الاسم العربي للدبوس:' : 'Pin Arabic Label:', t.item.labelAr || '');
+      if (ar === null) return;
+      var en = prompt(doc.lang === 'ar' ? 'الاسم الإنجليزي للدبوس:' : 'Pin English Label:', t.item.labelEn || '');
+      pushUndo('Edit Pin');
+      t.item.labelAr = ar.trim();
+      if (en !== null) t.item.labelEn = en.trim();
+      persistToIDB(); syncUI(); draw();
+    } else if (t.kind === 'asset') {
+      if (wsCtrl) wsCtrl.toggleRight(true);
+      var insp = ov && ov.querySelector('#scAssetInsp');
+      if (insp) insp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  function cloneSelectedTarget(t) {
+    if (!t) return;
+    if (t.kind === 'asset') { duplicateSelectedAsset(); return; }
+    if (t.kind === 'gis' && S.SatArcGIS) {
+      pushUndo('Clone GIS Feature');
+      var cp = S.SatArcGIS.createFeature(Object.assign({}, JSON.parse(JSON.stringify(t.item)), {
+        id: uid('gis'),
+        name: (t.item.name || 'Feature') + ' (نسخة)',
+        points: t.item.points.map(function (p) { return { x: +(p.x + 22).toFixed(2), y: +(p.y + 22).toFixed(2) }; })
+      }));
+      doc.gis.features.push(cp);
+      clearAllSelections(); selGisIds = [cp.id];
+      persistToIDB(); syncUI(); draw();
+    } else if (t.kind === 'geoterra' && S.SatGeoTerra) {
+      pushUndo('Clone GeoTerra Feature');
+      var gtCopy = JSON.parse(JSON.stringify(t.item));
+      gtCopy.id = S.SatGeoTerra.formatId(doc.geoterra.nextFeatNum++);
+      gtCopy.name = (gtCopy.name || '') + ' (نسخة)';
+      gtCopy.points = gtCopy.points.map(function (p) { return { x: +(p.x + 22).toFixed(2), y: +(p.y + 22).toFixed(2) }; });
+      doc.geoterra.features.push(gtCopy);
+      clearAllSelections(); selGtIdx = doc.geoterra.features.length - 1;
+      persistToIDB(); syncUI(); draw();
+    } else if (t.kind === 'pin') {
+      pushUndo('Clone Pin');
+      var pc = Object.assign({}, t.item, { id: uid('pin'), x: +(t.item.x + 22).toFixed(2), y: +(t.item.y + 22).toFixed(2) });
+      doc.overlays.pins.push(pc);
+      clearAllSelections(); selPinId = pc.id;
+      persistToIDB(); syncUI(); draw();
+    }
+  }
+
+  function deleteSelectedTarget(t) {
+    if (!t) return;
+    var msg = doc.lang === 'ar' ? ('حذف «' + t.label + '»؟ (يمكن التراجع بـ Undo)') : ('Delete "' + t.label + '"?');
+    if (!confirm(msg)) return;
+    quickMoveArmed = false; quickVertsArmed = false;
+    if (t.kind === 'asset') { deleteSelectedAsset(); return; }
+    if (t.kind === 'gis') {
+      pushUndo('Delete GIS Feature');
+      doc.gis.features = doc.gis.features.filter(function (f) { return selGisIds.indexOf(f.id) < 0; });
+      selGisIds = [];
+    } else if (t.kind === 'geoterra') {
+      pushUndo('Delete GeoTerra Feature');
+      doc.geoterra.features.splice(t.idx, 1);
+      selGtIdx = -1;
+    } else if (t.kind === 'pin') {
+      pushUndo('Delete Pin');
+      doc.overlays.pins = doc.overlays.pins.filter(function (p) { return p.id !== t.item.id; });
+      selPinId = null;
+    }
+    persistToIDB(); syncUI(); draw();
+  }
+
+  function positionQuickPop() {
+    if (!quickPopEl) return;
+    var t = getActiveSelectionTarget();
+    drawQuickVertexHandles(t);
+    if (!t || (drag && drag.m !== 'pan')) {
+      quickPopEl.classList.remove('show');
+      return;
+    }
+    var ar = doc.lang === 'ar';
+    var kindTag = t.kind === 'geoterra' ? 'GeoTerra' : t.kind === 'gis' ? 'ArcGIS' : t.kind === 'asset' ? 'Asset' : 'Pin';
+    var vertsBtnHtml = t.isPoly
+      ? ('<button type="button" class="satc-qpop-btn' + (quickVertsArmed ? ' amb' : '') + '" data-qa="verts">⬡ ' + (ar ? (quickVertsArmed ? 'إنهاء الزوايا' : 'زوايا') : (quickVertsArmed ? 'Done Pts' : 'Vertices')) + '</button>')
+      : (t.kind === 'asset' ? ('<button type="button" class="satc-qpop-btn" data-qa="crop">✂ ' + (ar ? 'قص' : 'Crop') + '</button>') : '');
+
+    quickPopEl.dir = ar ? 'rtl' : 'ltr';
+    quickPopEl.innerHTML =
+      '<div class="satc-qpop-hd">' +
+        '<span>[' + kindTag + '] ' + esc(t.label) + '</span>' +
+        '<button type="button" class="satc-qpop-btn" data-qa="close" style="flex:0 0 auto;min-height:20px;padding:1px 6px">✕</button>' +
+      '</div>' +
+      '<div class="satc-qpop-row">' +
+        '<button type="button" class="satc-qpop-btn" data-qa="edit">✎ ' + (ar ? 'تعديل' : 'Edit') + '</button>' +
+        '<button type="button" class="satc-qpop-btn' + (quickMoveArmed ? ' on' : '') + '" data-qa="move">✥ ' + (ar ? (quickMoveArmed ? 'تثبيت' : 'تحريك') : (quickMoveArmed ? 'Done' : 'Move')) + '</button>' +
+        vertsBtnHtml +
+        '<button type="button" class="satc-qpop-btn" data-qa="clone">⧉ ' + (ar ? 'نسخ' : 'Clone') + '</button>' +
+        '<button type="button" class="satc-qpop-btn dng" data-qa="del">🗑 ' + (ar ? 'حذف' : 'Delete') + '</button>' +
+      '</div>';
+
+    quickPopEl.classList.add('show');
+    var sp = i2s(t.anchorImg.x, t.anchorImg.y);
+    var pw = quickPopEl.offsetWidth || 220;
+    var ph = quickPopEl.offsetHeight || 68;
+    var left = clamp(sp[0] - pw / 2, 10, Math.max(10, W - pw - 10));
+    var top = sp[1] - ph - 22;
+    if (top < 38) top = Math.min(H - ph - 12, sp[1] + 24);
+    quickPopEl.style.left = Math.round(left) + 'px';
+    quickPopEl.style.top = Math.round(Math.max(38, top)) + 'px';
+
+    [].forEach.call(quickPopEl.querySelectorAll('[data-qa]'), function (btn) {
+      btn.onclick = function (ev) {
+        ev.stopPropagation();
+        var act = btn.dataset.qa;
+        if (act === 'close') { clearAllSelections(); quickVertsArmed = false; syncUI(); draw(); }
+        else if (act === 'edit') editSelectedTarget(t);
+        else if (act === 'move') {
+          quickMoveArmed = !quickMoveArmed;
+          if (quickMoveArmed) {
+            quickVertsArmed = false;
+            if (t.kind === 'asset' && t.item.locked) t.item.locked = false;
+            setStatus(ar ? 'وضع التحريك مفعّل: اسحب بإصبعك في أي مكان لتحريك «' + t.label + '» ثم اضغط تثبيت.' : 'Move Armed: Drag anywhere to move "' + t.label + '", then tap Done.', false);
+          } else {
+            setStatus(ar ? 'تم تثبيت موقع المعلم.' : 'Position locked.', false);
+          }
+          draw();
+        } else if (act === 'verts') {
+          quickVertsArmed = !quickVertsArmed;
+          if (quickVertsArmed) {
+            quickMoveArmed = false;
+            setStatus(ar ? 'اسحب أي نقطة صفراء لتعديل زوايا «' + t.label + '».' : 'Drag any yellow corner handle to reshape "' + t.label + '".', false);
+          }
+          draw();
+        } else if (act === 'crop') { setTool('crop_asset'); }
+        else if (act === 'clone') cloneSelectedTarget(t);
+        else if (act === 'del') deleteSelectedTarget(t);
+      };
+    });
+  }
+
+  // =========================================================================
+  // 10. CALIBRATION, GIS TOPOLOGY, GEOPROCESSING, GEOTERRA & 3D/CAD BRIDGE
   // =========================================================================
   function applyCalibration(knownMeters) {
     var m = parseFloat(knownMeters);
@@ -1460,14 +1730,14 @@ window.SOS = window.SOS || {};
       doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== target.id; });
       var f1 = S.SatArcGIS.createFeature(Object.assign({}, target, { id: uid('gis'), name: target.name + ' (A)', points: parts[0] }));
       var f2 = S.SatArcGIS.createFeature(Object.assign({}, target, { id: uid('gis'), name: target.name + ' (B)', points: parts[1] }));
-      doc.gis.features.push(f1, f2); selGisIds = [f1.id, f2.id];
+      doc.gis.features.push(f1, f2); clearAllSelections(); selGisIds = [f1.id, f2.id];
       persistToIDB(); setTool('select'); syncUI(); draw(); return;
     }
     var minPts = tool === 'gis_line' ? 2 : 3;
     if (gisDraftPts.length < minPts) { setStatus('Click at least ' + minPts + ' points first.', true); return; }
     pushUndo(tool === 'gis_line' ? 'Draw GIS Line' : 'Draw GIS Polygon');
     var feat = S.SatArcGIS.createFeature({ geom: tool === 'gis_line' ? 'polyline' : 'polygon', category: doc.gis.activeCategory || 'building', points: gisDraftPts.slice() });
-    doc.gis.features.push(feat); doc.layers.gis.visible = true; selGisIds = [feat.id]; gisDraftPts = [];
+    doc.gis.features.push(feat); doc.layers.gis.visible = true; clearAllSelections(); selGisIds = [feat.id]; gisDraftPts = [];
     persistToIDB(); syncUI(); draw();
   }
 
@@ -1485,7 +1755,7 @@ window.SOS = window.SOS || {};
       var nf = S.SatArcGIS.createFeature({ geom: 'polygon', category: polys[0].category, name: polys[0].name + ' [' + op + (rings.length > 1 ? (' ' + (i + 1)) : '') + ']', points: r });
       doc.gis.features.push(nf); created.push(nf.id);
     });
-    selGisIds = created; persistToIDB(); syncUI(); draw();
+    clearAllSelections(); selGisIds = created; persistToIDB(); syncUI(); draw();
   }
 
   function runBufferTool(centerPt) {
@@ -1545,7 +1815,7 @@ window.SOS = window.SOS || {};
     if (!rel) return;
     var dM = rel === 'within_distance' ? (parseFloat(prompt('Max distance in meters:', '20')) || 20) : 0;
     var hits = S.SatArcGIS.selectByLocation(doc.gis.features, ref, rel.trim(), dM, doc.calibration.pxPerMeter);
-    selGisIds = [ref.id].concat(hits); openBottomTab('attr'); syncUI(); draw();
+    clearAllSelections(); selGisIds = [ref.id].concat(hits); openBottomTab('attr'); syncUI(); draw();
   }
 
   function runCogoInput() {
@@ -1669,7 +1939,7 @@ window.SOS = window.SOS || {};
     var copy = normalizeAsset(JSON.parse(JSON.stringify(a)));
     copy.id = uid('ast'); copy.name = a.name + ' (copy)';
     copy.x = +(a.x + 20).toFixed(2); copy.y = +(a.y + 20).toFixed(2); copy.locked = false;
-    doc.assets.push(copy); selAssetId = copy.id; persistToIDB(); syncUI(); draw();
+    doc.assets.push(copy); clearAllSelections(); selAssetId = copy.id; persistToIDB(); syncUI(); draw();
   }
   function deleteSelectedAsset() {
     var a = getSelAsset(); if (!a) return;
@@ -1684,7 +1954,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 10. POINTER & KEYBOARD HANDLERS
+  // 11. POINTER & KEYBOARD HANDLERS (WITH QUICK MOVE + VERTEX DRAG)
   // =========================================================================
   function posOf(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   function twoPtrs() {
@@ -1724,8 +1994,49 @@ window.SOS = window.SOS || {};
       if (driftFixPending) { driftFixPending = false; triggerDriftFixAtClick(ip); return; }
 
       if (tool === 'select') {
+        var curT = getActiveSelectionTarget();
+
+        // A. Quick Vertex Reshape Drag (when ⬡ زوايا is armed)
+        if (quickVertsArmed && curT && curT.isPoly && curT.item.points) {
+          for (var vi = 0; vi < curT.item.points.length; vi++) {
+            var vsp = i2s(curT.item.points[vi].x, curT.item.points[vi].y);
+            if (Math.hypot(p.x - vsp[0], p.y - vsp[1]) <= 16) {
+              drag = { m: curT.kind === 'geoterra' ? 'moveGtVert' : 'moveGisVert', fi: curT.idx, feat: curT.item, vi: vi, pushed: false };
+              return;
+            }
+          }
+        }
+
+        // B. Quick Whole-Object Move Drag (when ✥ تحريك is armed — drag anywhere on screen!)
+        if (quickMoveArmed && curT) {
+          if (curT.kind === 'asset') {
+            drag = { m: 'move', a: curT.item, sx: ip.x, sy: ip.y, x0: curT.item.x, y0: curT.item.y, pushed: false };
+            return;
+          }
+          if (curT.kind === 'pin') {
+            drag = { m: 'movePin', pin: curT.item, sx: ip.x, sy: ip.y, x0: curT.item.x, y0: curT.item.y, pushed: false };
+            return;
+          }
+          if (curT.kind === 'gis' || curT.kind === 'geoterra') {
+            drag = {
+              m: 'movePolyWhole',
+              feat: curT.item,
+              label: curT.label,
+              sx: ip.x, sy: ip.y,
+              origPts: curT.item.points.map(function (pt) { return { x: pt.x, y: pt.y }; }),
+              pushed: false
+            };
+            return;
+          }
+        }
+
+        // C. Standard Selection Hit-Testing (Pins -> Asset Handles -> Assets -> GeoTerra -> ArcGIS)
         var hitP = hitPinAt(p);
-        if (hitP) { selPinId = hitP.id; drag = { m: 'movePin', pin: hitP, sx: ip.x, sy: ip.y, x0: hitP.x, y0: hitP.y, pushed: false }; syncUI(); draw(); return; }
+        if (hitP) {
+          clearAllSelections(); quickVertsArmed = false; selPinId = hitP.id;
+          drag = { m: 'movePin', pin: hitP, sx: ip.x, sy: ip.y, x0: hitP.x, y0: hitP.y, pushed: false };
+          syncUI(); draw(); return;
+        }
         var sel = getSelAsset(), hk = hitAssetHandle(sel, p);
         if (hk && sel) {
           if (hk === 'rot') { drag = { m: 'rot', a: sel, pushed: false }; return; }
@@ -1736,15 +2047,29 @@ window.SOS = window.SOS || {};
           return;
         }
         var hitA = hitAssetAt(ip);
-        if (hitA) { selAssetId = hitA.id; drag = { m: 'move', a: hitA, sx: ip.x, sy: ip.y, x0: hitA.x, y0: hitA.y, pushed: false }; syncUI(); draw(); return; }
+        if (hitA) {
+          clearAllSelections(); quickVertsArmed = false; selAssetId = hitA.id;
+          if (!hitA.locked) drag = { m: 'move', a: hitA, sx: ip.x, sy: ip.y, x0: hitA.x, y0: hitA.y, pushed: false };
+          syncUI(); draw(); return;
+        }
+        var hitGtI = hitGeoTerraAt(ip, p);
+        if (hitGtI >= 0) {
+          clearAllSelections(); quickVertsArmed = false; selGtIdx = hitGtI;
+          syncUI(); draw(); return;
+        }
         var hitG = hitGisAt(ip, p);
         if (hitG) {
-          if (e.ctrlKey || e.shiftKey) { var pos = selGisIds.indexOf(hitG.id); if (pos >= 0) selGisIds.splice(pos, 1); else selGisIds.push(hitG.id); }
-          else selGisIds = [hitG.id];
-          selAssetId = null; syncUI(); draw(); return;
+          if (e.ctrlKey || e.shiftKey) {
+            var pos = selGisIds.indexOf(hitG.id);
+            if (pos >= 0) selGisIds.splice(pos, 1); else selGisIds.push(hitG.id);
+          } else {
+            clearAllSelections(); quickVertsArmed = false; selGisIds = [hitG.id];
+          }
+          syncUI(); draw(); return;
         }
-        selAssetId = null; selGisIds = [];
-        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy }; syncUI(); draw(); return;
+        clearAllSelections(); quickVertsArmed = false;
+        drag = { m: 'pan', x: p.x, y: p.y, ox: view.ox, oy: view.oy };
+        syncUI(); draw(); return;
       }
 
       if (tool === 'crop_asset' || tool === 'lasso_erase') {
@@ -1791,7 +2116,7 @@ window.SOS = window.SOS || {};
       if (tool === 'gis_point') {
         var spPt = getSnappedImgPt(ip, e, null); pushUndo('Add GIS Point');
         var nf = S.SatArcGIS.createFeature({ geom: 'point', category: doc.gis.activeCategory, points: [spPt] });
-        doc.gis.features.push(nf); doc.layers.gis.visible = true; selGisIds = [nf.id]; persistToIDB(); syncUI(); draw(); return;
+        doc.gis.features.push(nf); doc.layers.gis.visible = true; clearAllSelections(); selGisIds = [nf.id]; persistToIDB(); syncUI(); draw(); return;
       }
       if (tool === 'gis_line' || tool === 'poly_draw' || tool === 'gis_split') {
         var spG = getSnappedImgPt(ip, e, gisDraftPts);
@@ -1803,12 +2128,12 @@ window.SOS = window.SOS || {};
       if (tool === 'gis_viewshed') { runViewshedAt(ip); return; }
       if (tool === 'pin') {
         var hp2 = hitPinAt(p);
-        if (hp2) { selPinId = hp2.id; drag = { m: 'movePin', pin: hp2, sx: ip.x, sy: ip.y, x0: hp2.x, y0: hp2.y, pushed: false }; syncUI(); draw(); return; }
+        if (hp2) { clearAllSelections(); selPinId = hp2.id; drag = { m: 'movePin', pin: hp2, sx: ip.x, sy: ip.y, x0: hp2.x, y0: hp2.y, pushed: false }; syncUI(); draw(); return; }
         pushUndo('Place Pin'); doc.layers.overlays.visible = true;
         var catObj = (S.SatExport && S.SatExport.PIN_CATS[pinCat]) || { color: '#0284c7' };
         var nIdx = doc.overlays.pins.length + 1;
         var np = { id: uid('pin'), x: +ip.x.toFixed(2), y: +ip.y.toFixed(2), cat: pinCat, color: catObj.color, labelEn: 'Point ' + nIdx, labelAr: 'موقع ' + nIdx, showTag: false };
-        doc.overlays.pins.push(np); selPinId = np.id; persistToIDB(); syncUI(); draw(); return;
+        doc.overlays.pins.push(np); clearAllSelections(); selPinId = np.id; persistToIDB(); syncUI(); draw(); return;
       }
       if (tool === 'calibrate') {
         if (!calibDraft.p1 || (calibDraft.p1 && calibDraft.p2)) calibDraft = { p1: ip, p2: null }; else calibDraft.p2 = ip;
@@ -1845,9 +2170,9 @@ window.SOS = window.SOS || {};
         if (doc.geoterra.editSavedVertices) {
           for (var fi = 0; fi < doc.geoterra.features.length; fi++) {
             var fp = doc.geoterra.features[fi].points;
-            for (var vi = 0; vi < fp.length; vi++) {
-              var vsp = i2s(fp[vi].x, fp[vi].y);
-              if (Math.hypot(p.x - vsp[0], p.y - vsp[1]) <= 12) { drag = { m: 'moveGtVert', fi: fi, vi: vi, pushed: false }; return; }
+            for (var vi2 = 0; vi2 < fp.length; vi2++) {
+              var vsp2 = i2s(fp[vi2].x, fp[vi2].y);
+              if (Math.hypot(p.x - vsp2[0], p.y - vsp2[1]) <= 12) { drag = { m: 'moveGtVert', fi: fi, vi: vi2, pushed: false }; return; }
             }
           }
           return;
@@ -1874,7 +2199,16 @@ window.SOS = window.SOS || {};
       else if (drag.m === 'brush') { if (Math.hypot(ip.x - drag.last.x, ip.y - drag.last.y) >= Math.max(2, photoCfg.radius * 0.25)) { stampPaintBrushDab(ip); drag.last = ip; } }
       else if (drag.m === 'move') { if (!drag.pushed) { pushUndo('Move Asset'); drag.pushed = true; } drag.a.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.a.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2); }
       else if (drag.m === 'movePin') { if (!drag.pushed) { pushUndo('Move Pin'); drag.pushed = true; } drag.pin.x = +(drag.x0 + (ip.x - drag.sx)).toFixed(2); drag.pin.y = +(drag.y0 + (ip.y - drag.sy)).toFixed(2); }
-      else if (drag.m === 'rot') {
+      else if (drag.m === 'movePolyWhole') {
+        if (!drag.pushed) { pushUndo('Move ' + (drag.label || 'Feature')); drag.pushed = true; }
+        var ddxW = ip.x - drag.sx, ddyW = ip.y - drag.sy;
+        drag.feat.points = drag.origPts.map(function (pt) {
+          return { x: +clamp(pt.x + ddxW, 0, dims.w).toFixed(2), y: +clamp(pt.y + ddyW, 0, dims.h).toFixed(2) };
+        });
+      } else if (drag.m === 'moveGisVert') {
+        if (!drag.pushed) { pushUndo('Move GIS Vertex'); drag.pushed = true; }
+        drag.feat.points[drag.vi] = { x: +clamp(ip.x, 0, dims.w).toFixed(2), y: +clamp(ip.y, 0, dims.h).toFixed(2) };
+      } else if (drag.m === 'rot') {
         if (!drag.pushed) { pushUndo('Rotate Asset'); drag.pushed = true; }
         var deg = ((Math.atan2(ip.y - drag.a.y, ip.x - drag.a.x) / D + 90) % 360 + 360) % 360;
         if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -1926,12 +2260,14 @@ window.SOS = window.SOS || {};
           var poly = S.SatArcGIS.makeCirclePolygon(cc.x, cc.y, rPx, 48);
           var rM = doc.calibration.pxPerMeter > 0 ? (' (R ' + (rPx / doc.calibration.pxPerMeter).toFixed(1) + 'm)') : '';
           var cf = S.SatArcGIS.createFeature({ geom: 'polygon', category: doc.gis.activeCategory, name: 'Circle' + rM, points: poly });
-          doc.gis.features.push(cf); doc.layers.gis.visible = true; selGisIds = [cf.id]; persistToIDB(); syncUI();
+          doc.gis.features.push(cf); doc.layers.gis.visible = true; clearAllSelections(); selGisIds = [cf.id]; persistToIDB(); syncUI();
         }
         draw(); return;
       }
-      if (drag && (drag.pushed || drag.m === 'clone' || drag.m === 'erase' || drag.m === 'brush')) { persistToIDB(); syncUI(); }
+      var didMutate = drag && (drag.pushed || drag.m === 'clone' || drag.m === 'erase' || drag.m === 'brush');
       if (!Object.keys(ptrs).length || (drag && drag.m === 'pinch')) drag = null;
+      if (didMutate) { persistToIDB(); syncUI(); }
+      draw();
     }
     cv.addEventListener('pointerup', up);
     cv.addEventListener('pointercancel', up);
@@ -1954,7 +2290,8 @@ window.SOS = window.SOS || {};
     if (e.key === 'Escape') {
       calibDraft = { p1: null, p2: null }; bearingDraft = { p1: null, p2: null };
       measPts = []; cutPts = []; gisDraftPts = []; gtDraftPts = [];
-      cloneCfg.pickMode = false; driftFixPending = false; setTool('select'); return;
+      cloneCfg.pickMode = false; driftFixPending = false; quickMoveArmed = false; quickVertsArmed = false;
+      setTool('select'); return;
     }
     if (e.key === 'Enter') {
       if (tool === 'crop_asset' && cutPts.length >= 3) { e.preventDefault(); applyCropSelectedAsset(); return; }
@@ -1966,14 +2303,13 @@ window.SOS = window.SOS || {};
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); doRedo(); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { if (getSelAsset()) { e.preventDefault(); duplicateSelectedAsset(); } return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { var ct = getActiveSelectionTarget(); if (ct) { e.preventDefault(); cloneSelectedTarget(ct); } return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (cutPts.length) { e.preventDefault(); cutPts.pop(); syncUI(); draw(); return; }
       if (gisDraftPts.length) { e.preventDefault(); gisDraftPts.pop(); syncUI(); draw(); return; }
       if (gtDraftPts.length) { e.preventDefault(); gtDraftPts.pop(); syncUI(); draw(); return; }
-      if (getSelPin() && tool === 'pin') { e.preventDefault(); pushUndo('Delete Pin'); doc.overlays.pins = doc.overlays.pins.filter(function (x) { return x.id !== selPinId; }); selPinId = null; persistToIDB(); syncUI(); draw(); return; }
-      if (selGisIds.length) { e.preventDefault(); pushUndo('Delete GIS Features'); doc.gis.features = doc.gis.features.filter(function (f) { return selGisIds.indexOf(f.id) < 0; }); selGisIds = []; persistToIDB(); syncUI(); draw(); return; }
-      if (getSelAsset()) { e.preventDefault(); deleteSelectedAsset(); return; }
+      var dt = getActiveSelectionTarget();
+      if (dt) { e.preventDefault(); deleteSelectedTarget(dt); return; }
     }
     if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       var kMap = { v: 'select', h: 'pan', c: 'crop_asset', l: 'lasso_erase', w: 'wand', x: 'cutout', s: 'clone', e: 'erase', b: 'brush', i: 'eyedropper', p: 'poly_draw', m: 'measure' };
@@ -1986,10 +2322,11 @@ window.SOS = window.SOS || {};
   function onKeyUp(e) { if (e.key === ' ') space = false; }
 
   // =========================================================================
-  // 11. UNIFIED UI BUILD, MENU ROUTER & SYNC
+  // 12. UNIFIED UI BUILD, MENU ROUTER & SYNC
   // =========================================================================
   function setTool(t) {
     tool = t;
+    quickMoveArmed = false; quickVertsArmed = false;
     if (t !== 'measure') measPts = [];
     if (t !== 'cutout' && t !== 'crop_asset' && t !== 'lasso_erase') cutPts = [];
     if (t !== 'poly_draw' && t !== 'gis_line' && t !== 'gis_split') gisDraftPts = [];
@@ -2042,8 +2379,8 @@ window.SOS = window.SOS || {};
         break;
       case 'undo': doUndo(); break;
       case 'redo': doRedo(); break;
-      case 'dup_sel': duplicateSelectedAsset(); break;
-      case 'del_sel': deleteSelectedAsset(); break;
+      case 'dup_sel': cloneSelectedTarget(getActiveSelectionTarget()); break;
+      case 'del_sel': deleteSelectedTarget(getActiveSelectionTarget()); break;
       case 'auto_tone': autoMatchSoilTone(); break;
       case 'clear_patches': if (doc.patches.length) { pushUndo('Clear Patches'); doc.patches = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
       case 'clear_erases': if (doc.cleanupErases.length) { pushUndo('Clear Erases'); doc.cleanupErases = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
@@ -2223,7 +2560,7 @@ window.SOS = window.SOS || {};
           onFilter: function (txt, cat) { attrFilter.text = txt; attrFilter.cat = cat; renderBottomDrawerContent(); },
           onSelect: function (id, multi) {
             if (multi) { var i = selGisIds.indexOf(id); if (i >= 0) selGisIds.splice(i, 1); else selGisIds.push(id); }
-            else selGisIds = [id];
+            else { clearAllSelections(); selGisIds = [id]; }
             renderBottomDrawerContent(); draw();
           },
           onToggleVis: function (id, vis) { var f = getGisById(id); if (f) { f.visible = vis; persistToIDB(); draw(); } },
@@ -2293,7 +2630,7 @@ window.SOS = window.SOS || {};
       return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '"><input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + '><span>' + esc(a.name) + '</span></div>';
     }).join('') : '<div class="mut">No assets added yet.</div>';
     [].forEach.call(al.querySelectorAll('[data-aid]'), function (el) {
-      el.onclick = function (ev) { if (ev.target.dataset && ev.target.dataset.avis) return; selAssetId = el.dataset.aid; syncUI(); draw(); };
+      el.onclick = function (ev) { if (ev.target.dataset && ev.target.dataset.avis) return; clearAllSelections(); selAssetId = el.dataset.aid; syncUI(); draw(); };
     });
     [].forEach.call(al.querySelectorAll('[data-avis]'), function (cb) {
       cb.onchange = function () { for (var i = 0; i < doc.assets.length; i++) if (doc.assets[i].id === cb.dataset.avis) { doc.assets[i].visible = !!cb.checked; persistToIDB(); draw(); break; } };
@@ -2331,12 +2668,15 @@ window.SOS = window.SOS || {};
           },
           onFocusFeature: function (idx) {
             var f = doc.geoterra.features[idx]; if (!f) return;
-            var ctr = S.SatGeoTerra.polyAreaCentroidXY(f.points); panToImgPt(ctr.cx, ctr.cy); draw();
+            clearAllSelections(); selGtIdx = idx;
+            var ctr = S.SatGeoTerra.polyAreaCentroidXY(f.points); panToImgPt(ctr.cx, ctr.cy); syncUI(); draw();
           },
           onEditFeature: function (idx) { var f = doc.geoterra.features[idx]; if (f) openGeoTerraModalFor(f.points, f.geometry, idx); },
           onDeleteFeature: function (idx) {
             if (!confirm('Delete GeoTerra feature?')) return;
-            pushUndo('Delete GeoTerra Feature'); doc.geoterra.features.splice(idx, 1); persistToIDB(); syncUI(); draw();
+            pushUndo('Delete GeoTerra Feature'); doc.geoterra.features.splice(idx, 1);
+            if (selGtIdx === idx) selGtIdx = -1;
+            persistToIDB(); syncUI(); draw();
           }
         }
       });
@@ -2364,6 +2704,7 @@ window.SOS = window.SOS || {};
 
   function build() {
     if (S.SatThemeUI) S.SatThemeUI.ensureCss();
+    ensureQuickPopCss();
     ov = document.createElement('div');
     ov.className = 'satc-pro hide';
     ov.dataset.ajDone = '1';
@@ -2407,6 +2748,7 @@ window.SOS = window.SOS || {};
         '<div class="satc-center">' +
           '<div class="satc-cvwrap">' +
             '<canvas id="scCv"></canvas>' +
+            '<div id="scQuickPop" class="satc-qpop" data-aj-done="1"></div>' +
             '<button type="button" class="satc-edge-btn l" title="Hide/Show Left Tools">◀</button>' +
             '<button type="button" class="satc-edge-btn r" title="Hide/Show Right Layers">▶</button>' +
             '<div class="satc-swipe"><div class="satc-swipe-knob">⇄</div></div>' +
@@ -2480,7 +2822,9 @@ window.SOS = window.SOS || {};
       '<input type="file" id="scFileGtJson" hidden>';
 
     document.body.appendChild(ov);
-    cv = ov.querySelector('#scCv'); ctx = cv.getContext('2d'); bindCanvas();
+    cv = ov.querySelector('#scCv'); ctx = cv.getContext('2d');
+    quickPopEl = ov.querySelector('#scQuickPop');
+    bindCanvas();
 
     if (S.SatThemeUI) {
       menuCtrl = S.SatThemeUI.buildMenuBar(ov.querySelector('#scMenuBar'), { lang: doc.lang, onAction: handleMenuAction });
@@ -2565,7 +2909,7 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 12. PUBLIC ISOLATED MODULE API
+  // 13. PUBLIC ISOLATED MODULE API
   // =========================================================================
   function open() {
     try {
@@ -2581,8 +2925,9 @@ window.SOS = window.SOS || {};
   }
 
   function close() {
-    isOpen = false; space = false;
+    isOpen = false; space = false; quickMoveArmed = false; quickVertsArmed = false;
     if (ov) ov.classList.add('hide');
+    if (quickPopEl) quickPopEl.classList.remove('show');
     if (railCtrl && railCtrl.hideTip) railCtrl.hideTip();
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('keyup', onKeyUp);
@@ -2615,7 +2960,7 @@ window.SOS = window.SOS || {};
       if (!payload || typeof payload !== 'object') return false;
       opGen++; var snapGen = opGen;
       undoStack = []; redoStack = [];
-      selAssetId = null; selPinId = null; selGisIds = []; cutPts = []; gisDraftPts = []; gtDraftPts = [];
+      clearAllSelections(); quickVertsArmed = false; cutPts = []; gisDraftPts = []; gtDraftPts = [];
       doc = mergeDoc(payload.doc || payload);
       var inBins = payload.bins || {};
       var sameBase = !inBins.base && bins.base && doc.base.id && payload.doc && payload.doc.base && payload.doc.base.id === doc.base.id;
@@ -2638,7 +2983,7 @@ window.SOS = window.SOS || {};
       opGen++; doc = blankDoc(); bins = blankBins(); imgs = { base: null, cleanup: null, assets: {} };
       if (cleanupCacheCv) { cleanupCacheCv.width = 0; cleanupCacheCv.height = 0; cleanupCacheCv = null; }
       cleanupDirty = true; undoStack = []; redoStack = [];
-      selAssetId = null; selPinId = null; selGisIds = []; cutPts = []; gisDraftPts = []; gtDraftPts = []; measPts = [];
+      clearAllSelections(); quickVertsArmed = false; cutPts = []; gisDraftPts = []; gtDraftPts = []; measPts = [];
       calibDraft = { p1: null, p2: null }; bearingDraft = { p1: null, p2: null };
       georefModel = null; viewshedResult = null; rangeRingsState = null; evacMatrixLinks = [];
       cloneCfg.src = null; cloneCfg.pickMode = false;
