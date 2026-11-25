@@ -79,7 +79,6 @@ window.SOS = window.SOS || {};
           }
         }
       } catch (satErr) {
-        console.warn('SatComposer export fallback (lightweight):', satErr);
         try {
           if (S.SatComposer && S.SatComposer.exportState) out.satStudio = S.SatComposer.exportState({ includeHeavy: false });
         } catch (e2) {}
@@ -101,11 +100,23 @@ window.SOS = window.SOS || {};
     loadProjectJSON: function (file) {
       var self = this;
       return new Promise(function (res, rej) {
+        if (file && /\.zip$/i.test(file.name) && S.SatComposer && S.SatComposer.importGeoTerraFile) {
+          S.SatComposer.open();
+          S.SatComposer.importGeoTerraFile(file);
+          return res(self.project);
+        }
         var r = new FileReader();
         r.onload = function () {
           try {
-            var p = JSON.parse(r.result);
-            if (!p.meta || !Array.isArray(p.features)) throw new Error('Not a valid .ajcad.json / .sos.json project file');
+            var clean = String(r.result || '').replace(/^\uFEFF/, '').trim();
+            var p = JSON.parse(clean);
+            var isGeoTerra = p && !p.meta && Array.isArray(p.features) && ('georeferencing' in p || 'executionPlan' in p || 'boundaryClosed' in p || 'imageWidth' in p || Array.isArray(p.points));
+            if (isGeoTerra && S.SatComposer && S.SatComposer.importGeoTerraData) {
+              S.SatComposer.open();
+              S.SatComposer.importGeoTerraData(p, null);
+              return res(self.project);
+            }
+            if (!p.meta || !Array.isArray(p.features)) throw new Error('Not a valid .ajcad.json / .sos.json or GeoTerra JSON file');
             var satData = (p.satStudio && typeof p.satStudio === 'object') ? p.satStudio : null;
             if ('satStudio' in p) delete p.satStudio;
             self.snapshot(); self.project = self.merge(p);
