@@ -65,3 +65,7 @@
 - 
 ​[✓] Phase 1 — js/satThemeUI.js: مكتمل بالكامل وجاهز (الهوية البصرية Cyber HUD + الوضع النهاري ui-day + التجاوب للجوال/التابلت/اللابتوب + القوائم العلوية + عمود الأيقونات مع Hover ودليل التعليمات الحي + أزرار إخفاء/إظهار الأشرطة + شريط مقارنة قبل/بعد).
 ​[→] Phase 2 — js/satGeorefGPS.js: التالي مباشرة (إصلاح شامل لمحرك الربط الجغرافي بـ 4 نماذج + جدول GCP وRMS + محوّل الإحداثيات DD / DMS / UTM 36N / Web Mercator + محلل اللصق الذكي + محرك GPS المطوّر بفلترة Kalman ومتوسط القراءات وتصحيح تشويش الـ GPS + البوصلة الحية + تصدير .pgw و.prj لـ ArcGIS/QGIS).
+​[✓] Phase 1 — js/satThemeUI.js: مكتمل.
+​[✓] Phase 2 — js/satGeorefGPS.js: مكتمل.
+​[✓] Phase 3 — js/satArcGIS.js: مكتمل (النقاط/الخطوط/المضلعات/الدوائر + Snapping + Ortho + COGO + Split/Union/Intersect/Erase + Buffer/Multi-Ring + Range Rings + 2D Viewshed + Heatmap + Nearest Evac Matrix + Spatial Query + Attribute Table + GeoJSON/KML/GPX/CSV/WKT).
+​[→] Phase 4 — js/satGeoTerra.js: التالي مباشرة (دمج 100% من Village Survey Pro v7 المرفق: حدود القرية والقطاعات المحاذية A1..F4، معالم REM/REP/MOD/ADD بالمضلعات والدبابيس، ضغط الصور الميدانية 1024px + وسم اتجاه البوصلة + نافذة Lightbox، مولّد AI Reference Sheet PNG، وضغط ZIP محلي بـ CRC32 مع ربطه المباشر بـ satGeorefGPS وsatArcGIS).
