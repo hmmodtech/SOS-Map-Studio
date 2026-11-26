@@ -69,3 +69,77 @@
 ​[✓] Phase 2 — js/satGeorefGPS.js: مكتمل.
 ​[✓] Phase 3 — js/satArcGIS.js: مكتمل (النقاط/الخطوط/المضلعات/الدوائر + Snapping + Ortho + COGO + Split/Union/Intersect/Erase + Buffer/Multi-Ring + Range Rings + 2D Viewshed + Heatmap + Nearest Evac Matrix + Spatial Query + Attribute Table + GeoJSON/KML/GPX/CSV/WKT).
 ​[→] Phase 4 — js/satGeoTerra.js: التالي مباشرة (دمج 100% من Village Survey Pro v7 المرفق: حدود القرية والقطاعات المحاذية A1..F4، معالم REM/REP/MOD/ADD بالمضلعات والدبابيس، ضغط الصور الميدانية 1024px + وسم اتجاه البوصلة + نافذة Lightbox، مولّد AI Reference Sheet PNG، وضغط ZIP محلي بـ CRC32 مع ربطه المباشر بـ satGeorefGPS وsatArcGIS).
+# AJ-GeoCAD Studio — Project Progress Log (`PROGRESS.md`)
+
+**Last Updated:** 2026-11-26  
+**Scope:** Sat Studio Unified Upgrade (Photoshop + ArcGIS/QGIS + GeoTerra v7) + Mobile Responsive Layout + Floating Quick Menu + Independent Bilingual UI (Default: EN)
+
+---
+
+## 1. Architecture & File Status
+
+| File | Status | Role / Summary |
+| :--- | :---: | :--- |
+| `js/satThemeUI.js` | **NEW / UPDATED** | Cyber HUD & Daylight (`ui-day`) CSS engine, offline SVG icon rail, top menu bar, live tool guide, collapsible fixed docks, Before/After swipe, Clean Field mode, and Independent Bilingual Settings modal (`aj_sat_lang_prefs_v1`). |
+| `js/satGeorefGPS.js` | **NEW** | 4-model GCP Georeferencing solver + RMS table, Smart Coords parser (`DD / DMS / UTM 36N / Google Maps URL`), Kalman-smoothed Live GPS + 1-pt Drift Fix + Breadcrumb Track, Live Compass, `.pgw`/`.prj` & KML Ground Overlay export. |
+| `js/satArcGIS.js` | **NEW** | Offline browser ArcGIS/QGIS engine: metrics & COGO, Snapping & Ortho, Topology (`Split / Union / Intersect / Difference`), Geoprocessing (`Buffer / Multi-Ring / Range Rings / 2D Viewshed / Heatmap / Nearest Evac Matrix`), Spatial & Attribute Queries, Attribute Table, and `GeoJSON / KML / GPX / CSV / WKT` I/O. |
+| `js/satGeoTerra.js` | **NEW** | Full `GeoTerra / Village Survey Pro v7` integration: aligned village boundary & interior sectors (`A1..F4`), phased features (`REM / REP / MOD / ADD`), 1024px photo compression + compass bearing tags + Lightbox, `AI Reference Sheet PNG`, pure-JS `CRC32` ZIP builder, and `convertToArcGISFeatures` bridge. |
+| `js/satComposer.js` | **UPDATED** | Unified 6-layer compositor (`01_Base_Satellite` .. `06_Print_Overlays`), IndexedDB persistence (`aj_geocad_sat_idb_v1`), 40-step Undo/Redo, GeoTerra `.json`/`.zip` direct import, Floating Quick Action Menu (`#scQuickPop`), CAD/3D push bridge, and independent EN/AR language binding. |
+| `index.html` | **UPDATED** | Loaded new `sat*` modules (`?v=19`), locked viewport (`100dvh`), split wrapped `#hud` top bar (zero horizontal scroll on mobile), and fixed collapsible `#left`/`#right` sidebars with internal scroll only. |
+| `js/state.js` | **UPDATED** | Auto-detects GeoTerra `.json` sessions and `.zip` bundles in `loadProjectJSON()` and opens/routes them directly into `Sat Studio`. |
+| `js/webgl3d.js` | **UNCHANGED** | Verified intact; renders pushed Sat Studio / GIS features automatically via `St.project.features`. |
+
+---
+
+## 2. Detailed Changelog (Verified & Completed)
+
+### A. Mobile & Responsive Workspace Layout (`index.html` & `js/satThemeUI.js`)
+- Locked root viewport (`100dvh`, `overflow: hidden`) to eliminate whole-page scrolling; scrolling is isolated inside sidebars, tool rails, and tables.
+- Converted top `#hud` (`index.html`) and `.satc-menubar` (`satThemeUI.js`) into multi-row flex layouts with zero horizontal scrolling on mobile (`<= 980px`).
+- Prioritized core mobile actions in row 1 (`Tools`, `Sat Studio`, `WebGL 3D GPU`, `Cyber/Daylight`, `Inspector`).
+- Configured `#left` / `#right` and Sat Studio docks as fixed-height slide-over drawers on mobile with auto-hide on startup and mutual exclusion (opening one closes the other).
+- Scoped CSS selectors inside `.satc-pro` to prevent global `index.html` button rules from overriding active states or Daylight theme colors.
+
+### B. ArcGIS / QGIS Vector & Spatial Analysis (`js/satArcGIS.js`)
+- **Geometry & COGO:** Live Area ($m^2$, dunum), Perimeter, Length, Forward/Back Bearing (respecting `northOffsetDeg`), 2-point True North calibration, and COGO (`Distance + Bearing`) vertex input.
+- **Snapping & Ortho:** Automatic snapping (`VERTEX`, `INTERSECT`, `MIDPOINT`, `EDGE`) + `Shift` 45°/90° ortho constraint.
+- **Topology:** `splitPolygonByLine`, `polygonBoolean` (`union`, `intersect`, `difference`).
+- **Geoprocessing:** Rounded outward `bufferGeometry` & `createMultiRingBuffers`, Range Rings + Azimuth Spider, 360-ray building-obstructed `computeViewshed2D`, `computeNearestEvacMatrix` (walk time at `1.4 m/s`), Heatmap overlay, `selectByLocation`, and `selectByAttribute`.
+- **I/O & Table:** Interactive bottom Attribute Table (`CSV` with UTF-8 BOM for Arabic Excel, `GeoJSON`, `KML`, `GPX`, `WKT`).
+
+### C. GeoTerra Field Survey v7 & Mobile Import Fixes (`js/satGeoTerra.js`, `js/satComposer.js`, `js/state.js`)
+- Migrated full `Village Survey Pro v7` engine (aligned `A1..F4` clipped grid, `REM -> REP -> MOD -> ADD` execution plan, `AI_PROMPT_BRIEF.txt`, `ai_reference_sheet.png`, zero-dependency `CRC32` ZIP export, `.pgw` + `.prj` bundling).
+- Removed restrictive `accept` attributes on `#scFileGis` and `#scFileGtJson` to fix grayed-out `.json`/`.zip` files on Android/Samsung file pickers.
+- Added direct `.zip` extraction (`extractGeoTerraFromZip`) restoring `project_ai.json`, attached `photos/*`, and optional temporary background map.
+- Enabled rendering of imported GeoTerra boundaries/features on a virtual canvas (`getBaseDims()`) even before `01_Base_Satellite` is loaded.
+- Added a direct import button (`#scImpGtDirect`) in the right dock plus automatic routing from main `Load Project` (`state.js`).
+
+### D. Floating Quick Action Menu (`js/satComposer.js`)
+- Added context-aware floating menu (`#scQuickPop`) anchored beside any selected entity in `Select` mode (works across **ArcGIS features**, **GeoTerra polygons/pins**, **03_Movable_Assets**, and **Poster Pins**).
+- Actions:
+  - **Edit (`✎`):** Opens GeoTerra modal, GIS/Pin attribute prompts, or Asset Inspector.
+  - **Move (`✥`):** Arms whole-object drag (moves all polygon vertices together from anywhere on screen until locked).
+  - **Vertices (`⬡`):** Displays numbered yellow corner handles for direct touch vertex reshaping on polygons/lines (replaced by **Crop `✂`** on image assets).
+  - **Clone (`⧉`) & Delete (`🗑`):** Full duplication and undoable deletion (`pushUndo`).
+
+### E. Independent Bilingual UI System (`js/satThemeUI.js` & `js/satComposer.js`)
+- **Default Language:** English (`en`) across all domains.
+- **Independent Controls** (accessible via `🌐` button in top quick bar or `View -> Language Settings`, persisted in `localStorage` key `aj_sat_lang_prefs_v1` even after `Clear Sat`):
+  1. `menus`: Top Menus, dropdowns, and Floating Quick Menu (`en` / `ar`).
+  2. `guide`: Left Tool Guide card & hover tooltips (`en` / `ar`).
+  3. `panels`: Left/Right sidebars, layer names, Asset Inspector, GeoTerra panel, and bottom drawer tabs (`en` / `ar`).
+- Added 1-tap presets: `All English`, `الكل عربي`, and `EN + شرح عربي`.
+
+---
+
+## 3. Deployment Verification Checklist
+- [ ] All 9 scripts uploaded under `js/` with exact casing (`satThemeUI.js`, `satGeorefGPS.js`, `satArcGIS.js`, `satGeoTerra.js`, `satComposer.js`, `state.js`).
+- [ ] `index.html` updated (`?v=19`) and GitHub Pages `Actions` build passed (green).
+- [ ] Tested on mobile in Incognito (Desktop site OFF): 2-row top bar, collapsible drawers, GeoTerra `.json`/`.zip` import, Floating Quick Menu, and `🌐` Language Settings modal.
+
+---
+
+## 4. Planned Next Upgrades (Pending Approval)
+- [ ] **3D Satellite Ground Texture (`js/webgl3d.js`):** Project `Master_Clean_2D` from Sat Studio as a real WebGL ground texture beneath 3D extruded buildings.
+- [ ] **Midpoint Vertex Add/Delete:** Allow adding/removing vertices along polygon edges inside `⬡ Vertices` mode on mobile.
+- [ ] **Collapsible Tool Guide Toggle:** Optional mini-button to hide the left Tool Guide card while keeping only the 50px icon rail visible during mobile field drawing.
