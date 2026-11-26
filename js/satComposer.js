@@ -19,10 +19,18 @@ window.SOS = window.SOS || {};
     });
   }
 
+  function defaultLangPrefs() {
+    return (S.SatThemeUI && S.SatThemeUI.loadLangPrefs)
+      ? S.SatThemeUI.loadLangPrefs()
+      : { menus: 'en', guide: 'en', panels: 'en' };
+  }
+
   function blankDoc() {
+    var lp = defaultLangPrefs();
     return {
       version: 2,
-      lang: 'ar',
+      lang: lp.panels,
+      langPrefs: lp,
       base: { id: null, name: '', mime: '', width: 0, height: 0, byteSize: 0 },
       calibration: { pxPerMeter: 0, p1: null, p2: null, knownMeters: 10 },
       layers: {
@@ -92,6 +100,11 @@ window.SOS = window.SOS || {};
   var liveGpsFix = null, liveCompassDeg = null, gpsStatusTxt = 'OFF';
   var viewshedResult = null, rangeRingsState = null, evacMatrixLinks = [];
   var driftFixPending = false, bottomTabMode = 'attr';
+
+  function langOf(part) {
+    var lp = doc.langPrefs || defaultLangPrefs();
+    return lp[part] === 'ar' ? 'ar' : 'en';
+  }
 
   function getBaseDims() {
     if (imgs.base && imgs.base.naturalWidth) return { w: imgs.base.naturalWidth, h: imgs.base.naturalHeight };
@@ -192,7 +205,7 @@ window.SOS = window.SOS || {};
                 if (snapGen !== opGen) return;
                 cleanupDirty = true;
                 setIdbBadge(bins.base ? 'Restored' : 'Ready');
-                if (isOpen) { fitView(); syncUI(); draw(); }
+                if (isOpen) { applyLanguagePrefsUI(); fitView(); syncUI(); draw(); }
               });
               res();
             };
@@ -225,13 +238,17 @@ window.SOS = window.SOS || {};
   function mergeDoc(raw) {
     var b = blankDoc();
     if (!raw || typeof raw !== 'object') return b;
+    var lp = (raw.langPrefs && S.SatThemeUI)
+      ? S.SatThemeUI.normalizeLangPrefs(raw.langPrefs)
+      : defaultLangPrefs();
     var gisRaw = raw.gis || {};
     var gisFeats = Array.isArray(gisRaw.features)
       ? gisRaw.features.map(function (f) { return S.SatArcGIS ? S.SatArcGIS.createFeature(f) : f; })
       : [];
     return {
       version: 2,
-      lang: raw.lang === 'en' ? 'en' : 'ar',
+      lang: lp.panels,
+      langPrefs: lp,
       base: Object.assign(b.base, raw.base || {}),
       calibration: Object.assign(b.calibration, raw.calibration || {}),
       layers: {
@@ -277,7 +294,10 @@ window.SOS = window.SOS || {};
 
   function restoreUndoEntry(entry) {
     var raw = typeof entry === 'string' ? entry : entry.json;
+    var curLp = Object.assign({}, doc.langPrefs);
     doc = mergeDoc(JSON.parse(raw));
+    doc.langPrefs = curLp;
+    doc.lang = curLp.panels;
     if (selAssetId && !getSelAsset()) selAssetId = null;
     if (selPinId && !getSelPin()) selPinId = null;
     selGisIds = selGisIds.filter(function (id) { return !!getGisById(id); });
@@ -513,7 +533,7 @@ window.SOS = window.SOS || {};
     reader.onload = function () {
       var dataUrl = reader.result;
       decodeImage(dataUrl, function (err, im) {
-        if (err || !im || !im.naturalWidth) { alert('ملف الصورة غير مدعوم أو تالف.'); return; }
+        if (err || !im || !im.naturalWidth) { alert(langOf('panels') === 'ar' ? 'ملف الصورة غير مدعوم أو تالف.' : 'Unsupported or corrupted image file.'); return; }
         var nw = im.naturalWidth, nh = im.naturalHeight;
         opGen++; pushUndo('Import Base Satellite');
         bins.base = dataUrl; imgs.base = im;
@@ -529,12 +549,12 @@ window.SOS = window.SOS || {};
   }
 
   function importCleanupFile(file) {
-    if (!file || !imgs.base) { alert('حمّل صورة خريطة الأساس أولاً.'); return; }
+    if (!file || !imgs.base) { alert(langOf('panels') === 'ar' ? 'حمّل صورة خريطة الأساس أولاً.' : 'Import Base Satellite image first.'); return; }
     var reader = new FileReader();
     reader.onload = function () {
       var dataUrl = reader.result;
       decodeImage(dataUrl, function (err, im) {
-        if (err || !im) { alert('صورة تنظيف غير صالحة.'); return; }
+        if (err || !im) { alert(langOf('panels') === 'ar' ? 'صورة تنظيف غير صالحة.' : 'Invalid cleanup image.'); return; }
         pushUndo('Load Pre-Cleaned Layer');
         bins.cleanup = dataUrl; imgs.cleanup = im;
         doc.cleanupImage = { id: uid('cln'), name: file.name, width: im.naturalWidth, height: im.naturalHeight };
@@ -547,7 +567,7 @@ window.SOS = window.SOS || {};
 
   function importAssetFiles(fileList) {
     if (!fileList || !fileList.length) return;
-    if (!imgs.base) { alert('حمّل صورة خريطة الأساس أولاً قبل إضافة العناصر.'); return; }
+    if (!imgs.base) { alert(langOf('panels') === 'ar' ? 'حمّل صورة خريطة الأساس أولاً قبل إضافة العناصر.' : 'Import Base Satellite image first.'); return; }
     var files = [].slice.call(fileList), doneCount = 0, addedCount = 0;
     pushUndo('Import PNG Asset');
     files.forEach(function (file, idx) {
@@ -591,13 +611,13 @@ window.SOS = window.SOS || {};
     r.onload = function () {
       try {
         var added = S.SatArcGIS.importGISFileText(file.name, String(r.result || ''), georefModel);
-        if (!added.length) { alert('لم يتم العثور على معالم جغرافية في: ' + file.name); return; }
+        if (!added.length) { alert('No GIS features found in: ' + file.name); return; }
         pushUndo('Import GIS: ' + file.name);
         added.forEach(function (f) { doc.gis.features.push(f); });
         doc.layers.gis.visible = true;
         persistToIDB(); syncUI(); draw();
         setStatus('Imported ' + added.length + ' GIS feature(s) from ' + file.name, false);
-      } catch (e) { alert('فشل استيراد الملف الجغرافي:\n' + e.message); }
+      } catch (e) { alert('GIS import failed:\n' + e.message); }
     };
     r.readAsText(file);
   }
@@ -652,7 +672,7 @@ window.SOS = window.SOS || {};
   }
 
   function applyParsedGeoTerraData(dataObj, optionalMapUrl) {
-    if (!S.SatGeoTerra) { alert('وحدة js/satGeoTerra.js غير محمّلة.'); return false; }
+    if (!S.SatGeoTerra) { alert('js/satGeoTerra.js is not loaded.'); return false; }
     var parsed = S.SatGeoTerra.parseImportedSurveyJson(JSON.stringify(dataObj));
     pushUndo('Import GeoTerra Session');
     doc.geoterra = parsed.state;
@@ -674,14 +694,23 @@ window.SOS = window.SOS || {};
     persistToIDB();
     if (isOpen) { fitView(); syncUI(); draw(); }
 
-    var msg = 'تم استيراد جلسة GeoTerra بنجاح (' + doc.geoterra.features.length + ' معلم | ' + doc.geoterra.gcps.length + ' GCP | ' + doc.geoterra.boundary.length + ' نقطة حدود).';
+    var ar = langOf('panels') === 'ar';
+    var msg = ar
+      ? ('تم استيراد جلسة GeoTerra بنجاح (' + doc.geoterra.features.length + ' معلم | ' + doc.geoterra.gcps.length + ' GCP | ' + doc.geoterra.boundary.length + ' نقطة حدود).')
+      : ('Imported GeoTerra session (' + doc.geoterra.features.length + ' items | ' + doc.geoterra.gcps.length + ' GCPs | ' + doc.geoterra.boundary.length + ' boundary pts).');
     setStatus(msg, false);
     if (wsCtrl) wsCtrl.toggleRight(true);
     var gp = ov && ov.querySelector('#scGtPanel');
     if (gp) gp.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     if (!imgs.base) {
-      if (optionalMapUrl && confirm(msg + '\n\nلم يتم تحميل خريطة الأساس بعد — هل تريد عرض صورة الخريطة المرفقة داخل الـ ZIP مؤقتاً كخلفية؟')) {
+      var qZip = ar
+        ? (msg + '\n\nهل تريد عرض صورة الخريطة المرفقة داخل الـ ZIP كخلفية مؤقتة؟')
+        : (msg + '\n\nDisplay the marked map inside this ZIP as a temporary background?');
+      var infoNoBase = ar
+        ? (msg + '\n\nالمعالم ظاهرة الآن. يمكنك تحميل صورة القمر الصناعي من (ملف ➔ استيراد خريطة الأساس).')
+        : (msg + '\n\nFeatures are visible now. Load your Base Satellite via File -> Import Base Satellite.');
+      if (optionalMapUrl && confirm(qZip)) {
         decodeImage(optionalMapUrl, function (err, im) {
           if (!err && im) {
             bins.base = optionalMapUrl; imgs.base = im;
@@ -690,7 +719,7 @@ window.SOS = window.SOS || {};
           }
         });
       } else {
-        alert(msg + '\n\nالمعالم والقطاعات ظاهرة الآن. يمكنك تحميل صورة القمر الصناعي الأصلية من (ملف ➔ استيراد خريطة الأساس) لتتطابق فوقها 100%.');
+        alert(infoNoBase);
       }
     }
     return true;
@@ -698,39 +727,36 @@ window.SOS = window.SOS || {};
 
   function importGeoTerraJsonFile(file) {
     if (!file) return;
-    if (!S.SatGeoTerra) { alert('وحدة js/satGeoTerra.js غير محمّلة. تأكد من تحديث الصفحة.'); return; }
+    if (!S.SatGeoTerra) { alert('js/satGeoTerra.js is not loaded.'); return; }
     if (/\.zip$/i.test(file.name)) {
       var rz = new FileReader();
-      rz.onerror = function () { alert('فشل قراءة ملف ZIP.'); };
+      rz.onerror = function () { alert('Failed to read ZIP file.'); };
       rz.onload = function () {
         try {
           var ext = extractGeoTerraFromZip(rz.result);
-          if (!ext || !ext.data) {
-            alert('تعذّر استخراج project_ai.json من هذا الـ ZIP.');
-            return;
-          }
+          if (!ext || !ext.data) { alert('Could not extract project_ai.json from this ZIP.'); return; }
           applyParsedGeoTerraData(ext.data, ext.mapPngUrl);
-        } catch (e) { alert('فشل قراءة حزمة GeoTerra ZIP:\n' + e.message); }
+        } catch (e) { alert('GeoTerra ZIP import failed:\n' + e.message); }
       };
       rz.readAsArrayBuffer(file);
       return;
     }
 
     var r = new FileReader();
-    r.onerror = function () { alert('فشل قراءة الملف من الجوال.'); };
+    r.onerror = function () { alert('Failed to read file.'); };
     r.onload = function () {
       try {
         var cleanTxt = String(r.result || '').replace(/^\uFEFF/, '').trim();
         var obj = JSON.parse(cleanTxt);
         if (obj && obj.satStudio) {
           importState(obj.satStudio);
-          alert('تم استيراد بيانات Sat Studio من ملف المشروع بنجاح.');
+          alert('Imported Sat Studio data from project file.');
           return;
         }
         applyParsedGeoTerraData(obj, null);
       } catch (e) {
         setStatus('GeoTerra JSON import failed: ' + e.message, true);
-        alert('فشل استيراد ملف GeoTerra JSON:\n' + e.message);
+        alert('GeoTerra JSON import failed:\n' + e.message);
       }
     };
     r.readAsText(file);
@@ -1199,7 +1225,7 @@ window.SOS = window.SOS || {};
     if (doc.layers.geoterra.visible && S.SatGeoTerra) {
       S.SatGeoTerra.drawGeoTerraLayer(ctx, {
         state: doc.geoterra, imgW: iw, imgH: ih, viewS: view.s, ox: view.ox, oy: view.oy,
-        lang: doc.lang, georefModel: georefModel, pxPerMeter: doc.calibration.pxPerMeter,
+        lang: langOf('panels'), georefModel: georefModel, pxPerMeter: doc.calibration.pxPerMeter,
         activeTool: tool, draftPoints: gtDraftPts,
         liveGpsFix: liveGpsFix, gpsTrack: gpsEngine ? gpsEngine.getTrack() : [],
         compassHeading: liveCompassDeg, forExport: false
@@ -1227,7 +1253,12 @@ window.SOS = window.SOS || {};
         ctx.font = 'bold 12px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('AJ-GeoCAD STUDIO — PHOTOSHOP + ArcGIS + GEOTERRA', W / 2, H / 2 - 12);
         ctx.font = '10.5px ' + MONO;
-        ctx.fillText('ملف ➔ استيراد خريطة الأساس  |  أو استيراد جلسة GeoTerra (.json / .zip)', W / 2, H / 2 + 12);
+        ctx.fillText(
+          langOf('panels') === 'ar'
+            ? 'ملف ➔ استيراد خريطة الأساس  |  أو استيراد جلسة GeoTerra (.json / .zip)'
+            : 'File ➔ Import Base Satellite  |  or Import GeoTerra Session (.json / .zip)',
+          W / 2, H / 2 + 12
+        );
         positionQuickPop();
         return;
       }
@@ -1258,7 +1289,6 @@ window.SOS = window.SOS || {};
       ctx.strokeStyle = isDay ? '#0369a1' : '#1f3b52'; ctx.lineWidth = 1.4;
       ctx.strokeRect(tl[0], tl[1], dw, dh);
 
-      // Highlight Selected GeoTerra Feature
       var selGt = getSelGt();
       if (selGt && doc.layers.geoterra.visible && selGt.points && selGt.points.length) {
         ctx.save();
@@ -1466,9 +1496,20 @@ window.SOS = window.SOS || {};
 
   // === END PART 1 / 2 ===
   // =========================================================================
-  // 9. FLOATING QUICK MENU (EDIT / MOVE / VERTICES / CLONE / DELETE)
+  // 9. INDEPENDENT LANGUAGE SYNC & FLOATING QUICK MENU (EDIT/MOVE/VERTS/CLONE/DEL)
   // =========================================================================
   var quickVertsArmed = false;
+
+  function applyLanguagePrefsUI() {
+    if (!ov || !S.SatThemeUI) return;
+    var lp = S.SatThemeUI.normalizeLangPrefs(doc.langPrefs);
+    doc.langPrefs = lp;
+    doc.lang = lp.panels;
+    if (menuCtrl) menuCtrl.setLang(lp.menus, lp);
+    if (railCtrl) railCtrl.render(tool, lp.guide);
+    S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, lp.guide);
+    S.SatThemeUI.applyPanelLang(ov, lp.panels);
+  }
 
   function ensureQuickPopCss() {
     if (document.getElementById('aj-sat-qpop-css')) return;
@@ -1496,7 +1537,7 @@ window.SOS = window.SOS || {};
   function getActiveSelectionTarget() {
     if (tool !== 'select' && tool !== 'pin') return null;
     var p = getSelPin();
-    if (p) return { kind: 'pin', item: p, label: (p.labelAr || p.labelEn || 'Pin'), anchorImg: { x: p.x, y: p.y }, isPoly: false };
+    if (p) return { kind: 'pin', item: p, label: (p.labelEn || p.labelAr || 'Pin'), anchorImg: { x: p.x, y: p.y }, isPoly: false };
     var a = getSelAsset();
     if (a) return { kind: 'asset', item: a, label: a.name || 'Asset', anchorImg: { x: a.x, y: a.y - a.hPx / 2 }, isPoly: false, locked: !!a.locked };
     var gt = getSelGt();
@@ -1535,23 +1576,24 @@ window.SOS = window.SOS || {};
 
   function editSelectedTarget(t) {
     if (!t) return;
+    var ar = langOf('menus') === 'ar';
     if (t.kind === 'geoterra') {
       openGeoTerraModalFor(t.item.points, t.item.geometry, t.idx);
     } else if (t.kind === 'gis') {
-      var nm = prompt(doc.lang === 'ar' ? 'اسم المعلم:' : 'Feature Name:', t.item.name || '');
+      var nm = prompt(ar ? 'اسم المعلم:' : 'Feature Name:', t.item.name || '');
       if (nm === null) return;
-      var nt = prompt(doc.lang === 'ar' ? 'ملاحظات المعلم:' : 'Feature Notes:', t.item.notes || '');
+      var nt = prompt(ar ? 'ملاحظات المعلم:' : 'Feature Notes:', t.item.notes || '');
       pushUndo('Edit GIS Feature');
       t.item.name = nm.trim() || t.item.name;
       if (nt !== null) t.item.notes = nt.trim();
       persistToIDB(); syncUI(); draw();
     } else if (t.kind === 'pin') {
-      var ar = prompt(doc.lang === 'ar' ? 'الاسم العربي للدبوس:' : 'Pin Arabic Label:', t.item.labelAr || '');
-      if (ar === null) return;
-      var en = prompt(doc.lang === 'ar' ? 'الاسم الإنجليزي للدبوس:' : 'Pin English Label:', t.item.labelEn || '');
+      var arL = prompt(ar ? 'الاسم العربي للدبوس:' : 'Pin Arabic Label:', t.item.labelAr || '');
+      if (arL === null) return;
+      var enL = prompt(ar ? 'الاسم الإنجليزي للدبوس:' : 'Pin English Label:', t.item.labelEn || '');
       pushUndo('Edit Pin');
-      t.item.labelAr = ar.trim();
-      if (en !== null) t.item.labelEn = en.trim();
+      t.item.labelAr = arL.trim();
+      if (enL !== null) t.item.labelEn = enL.trim();
       persistToIDB(); syncUI(); draw();
     } else if (t.kind === 'asset') {
       if (wsCtrl) wsCtrl.toggleRight(true);
@@ -1563,11 +1605,12 @@ window.SOS = window.SOS || {};
   function cloneSelectedTarget(t) {
     if (!t) return;
     if (t.kind === 'asset') { duplicateSelectedAsset(); return; }
+    var suffix = langOf('menus') === 'ar' ? ' (نسخة)' : ' (copy)';
     if (t.kind === 'gis' && S.SatArcGIS) {
       pushUndo('Clone GIS Feature');
       var cp = S.SatArcGIS.createFeature(Object.assign({}, JSON.parse(JSON.stringify(t.item)), {
         id: uid('gis'),
-        name: (t.item.name || 'Feature') + ' (نسخة)',
+        name: (t.item.name || 'Feature') + suffix,
         points: t.item.points.map(function (p) { return { x: +(p.x + 22).toFixed(2), y: +(p.y + 22).toFixed(2) }; })
       }));
       doc.gis.features.push(cp);
@@ -1577,7 +1620,7 @@ window.SOS = window.SOS || {};
       pushUndo('Clone GeoTerra Feature');
       var gtCopy = JSON.parse(JSON.stringify(t.item));
       gtCopy.id = S.SatGeoTerra.formatId(doc.geoterra.nextFeatNum++);
-      gtCopy.name = (gtCopy.name || '') + ' (نسخة)';
+      gtCopy.name = (gtCopy.name || '') + suffix;
       gtCopy.points = gtCopy.points.map(function (p) { return { x: +(p.x + 22).toFixed(2), y: +(p.y + 22).toFixed(2) }; });
       doc.geoterra.features.push(gtCopy);
       clearAllSelections(); selGtIdx = doc.geoterra.features.length - 1;
@@ -1593,7 +1636,8 @@ window.SOS = window.SOS || {};
 
   function deleteSelectedTarget(t) {
     if (!t) return;
-    var msg = doc.lang === 'ar' ? ('حذف «' + t.label + '»؟ (يمكن التراجع بـ Undo)') : ('Delete "' + t.label + '"?');
+    var ar = langOf('menus') === 'ar';
+    var msg = ar ? ('حذف «' + t.label + '»؟ (يمكن التراجع بـ Undo)') : ('Delete "' + t.label + '"? (Undoable)');
     if (!confirm(msg)) return;
     quickMoveArmed = false; quickVertsArmed = false;
     if (t.kind === 'asset') { deleteSelectedAsset(); return; }
@@ -1621,7 +1665,7 @@ window.SOS = window.SOS || {};
       quickPopEl.classList.remove('show');
       return;
     }
-    var ar = doc.lang === 'ar';
+    var ar = langOf('menus') === 'ar';
     var kindTag = t.kind === 'geoterra' ? 'GeoTerra' : t.kind === 'gis' ? 'ArcGIS' : t.kind === 'asset' ? 'Asset' : 'Pin';
     var vertsBtnHtml = t.isPoly
       ? ('<button type="button" class="satc-qpop-btn' + (quickVertsArmed ? ' amb' : '') + '" data-qa="verts">⬡ ' + (ar ? (quickVertsArmed ? 'إنهاء الزوايا' : 'زوايا') : (quickVertsArmed ? 'Done Pts' : 'Vertices')) + '</button>')
@@ -1662,7 +1706,7 @@ window.SOS = window.SOS || {};
           if (quickMoveArmed) {
             quickVertsArmed = false;
             if (t.kind === 'asset' && t.item.locked) t.item.locked = false;
-            setStatus(ar ? 'وضع التحريك مفعّل: اسحب بإصبعك في أي مكان لتحريك «' + t.label + '» ثم اضغط تثبيت.' : 'Move Armed: Drag anywhere to move "' + t.label + '", then tap Done.', false);
+            setStatus(ar ? 'وضع التحريك مفعّل: اسحب بإصبعك لتحريك «' + t.label + '» ثم اضغط تثبيت.' : 'Move Armed: Drag anywhere to move "' + t.label + '", then tap Done.', false);
           } else {
             setStatus(ar ? 'تم تثبيت موقع المعلم.' : 'Position locked.', false);
           }
@@ -1831,7 +1875,7 @@ window.SOS = window.SOS || {};
   function openGeoTerraModalFor(pts, geom, editIdx) {
     if (!S.SatGeoTerra) return;
     S.SatGeoTerra.openFeatureModal({
-      state: doc.geoterra, editIndex: editIdx, geometry: geom, points: pts, lang: doc.lang,
+      state: doc.geoterra, editIndex: editIdx, geometry: geom, points: pts, lang: langOf('panels'),
       getCompassHeading: function () { return liveCompassDeg; },
       onSave: function (payload, idx) {
         pushUndo('Save GeoTerra Feature ' + payload.id);
@@ -1888,13 +1932,14 @@ window.SOS = window.SOS || {};
 
   function pushFeaturesToCad(open3DAfter) {
     var d = getBaseDims();
-    if (!St || !St.project || !d.w) { alert('حمّل خريطة أو جلسة أولاً.'); return; }
+    var ar = langOf('panels') === 'ar';
+    if (!St || !St.project || !d.w) { alert(ar ? 'حمّل خريطة أو جلسة أولاً.' : 'Load a base map or session first.'); return; }
     var ppm = doc.calibration.pxPerMeter || (georefModel && georefModel.pxPerMeter) || 0;
-    if (!(ppm > 0)) { alert('عاير المقياس (px/m) أو اربط نقطتي GCP أولاً.'); return; }
+    if (!(ppm > 0)) { alert(ar ? 'عاير المقياس (px/m) أو اربط نقطتي GCP أولاً.' : 'Calibrate metric scale (px/m) or GCPs first.'); return; }
     var gisList = (doc.gis.features || []).filter(function (f) { return f.visible && f.points.length >= 1; });
     if (!gisList.length) {
       if (open3DAfter && S.WebGL3D) { close(); S.WebGL3D.open(); return; }
-      alert('لا توجد معالم GIS لإرسالها. ارسم معالم أو اضغط Push to ArcGIS في GeoTerra أولاً.'); return;
+      alert(ar ? 'لا توجد معالم GIS لإرسالها. ارسم معالم أو اضغط Push to ArcGIS أولاً.' : 'No visible GIS features to push. Draw features or Push from GeoTerra first.'); return;
     }
     var cx0 = d.w / 2, cy0 = d.h / 2;
     var catMap = { building: 'building', tent: 'tent', evac_route: 'road', safe_zone: 'assembly', hazard: 'hazard', perimeter: 'fence', camera: 'camera', buffer: 'yard', generic: 'building' };
@@ -1921,7 +1966,10 @@ window.SOS = window.SOS || {};
 
   function exportWorldFilePackage() {
     var d = getBaseDims();
-    if (!georefModel || !d.w || !S.SatGeorefGPS) { alert('اربط الخريطة بـ 2 GCP على الأقل أولاً.'); return; }
+    if (!georefModel || !d.w || !S.SatGeorefGPS) {
+      alert(langOf('panels') === 'ar' ? 'اربط الخريطة بـ 2 GCP على الأقل أولاً.' : 'Georeference the map with at least 2 GCPs first.');
+      return;
+    }
     var pgw = S.SatGeorefGPS.buildWorldFilePGW(georefModel, d.w, d.h);
     var kml = S.SatGeorefGPS.buildKmlGroundOverlay(georefModel, d.w, d.h, 'Master_Clean_2D.png', doc.overlays.titleEn || 'AJ-GeoCAD Map');
     if (S.SatGeoTerra && S.SatGeoTerra.buildZipBlob) {
@@ -1996,7 +2044,6 @@ window.SOS = window.SOS || {};
       if (tool === 'select') {
         var curT = getActiveSelectionTarget();
 
-        // A. Quick Vertex Reshape Drag (when ⬡ زوايا is armed)
         if (quickVertsArmed && curT && curT.isPoly && curT.item.points) {
           for (var vi = 0; vi < curT.item.points.length; vi++) {
             var vsp = i2s(curT.item.points[vi].x, curT.item.points[vi].y);
@@ -2007,7 +2054,6 @@ window.SOS = window.SOS || {};
           }
         }
 
-        // B. Quick Whole-Object Move Drag (when ✥ تحريك is armed — drag anywhere on screen!)
         if (quickMoveArmed && curT) {
           if (curT.kind === 'asset') {
             drag = { m: 'move', a: curT.item, sx: ip.x, sy: ip.y, x0: curT.item.x, y0: curT.item.y, pushed: false };
@@ -2030,7 +2076,6 @@ window.SOS = window.SOS || {};
           }
         }
 
-        // C. Standard Selection Hit-Testing (Pins -> Asset Handles -> Assets -> GeoTerra -> ArcGIS)
         var hitP = hitPinAt(p);
         if (hitP) {
           clearAllSelections(); quickVertsArmed = false; selPinId = hitP.id;
@@ -2334,7 +2379,7 @@ window.SOS = window.SOS || {};
     if (t !== 'clone') cloneCfg.pickMode = false;
     if (t !== 'bearing_cal') bearingDraft = { p1: null, p2: null };
     if (railCtrl) railCtrl.setActive(t);
-    if (ov && S.SatThemeUI) S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), t, doc.lang);
+    if (ov && S.SatThemeUI) S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), t, langOf('guide'));
     if (cv) cv.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
     syncUI(); draw();
   }
@@ -2351,6 +2396,18 @@ window.SOS = window.SOS || {};
       else { wsCtrl.state.bottomTab = tab; wsCtrl.applyState(); }
     }
     renderBottomDrawerContent();
+  }
+
+  function openLanguageSettings() {
+    if (!S.SatThemeUI || !S.SatThemeUI.openLangSettingsModal) return;
+    S.SatThemeUI.openLangSettingsModal(doc.langPrefs, function (newPrefs) {
+      doc.langPrefs = S.SatThemeUI.normalizeLangPrefs(newPrefs);
+      doc.lang = doc.langPrefs.panels;
+      applyLanguagePrefsUI();
+      persistToIDB();
+      syncUI();
+      draw();
+    });
   }
 
   function handleMenuAction(act) {
@@ -2374,7 +2431,7 @@ window.SOS = window.SOS || {};
       case 'export_gt_refsheet':
         if (S.SatGeoTerra) S.SatGeoTerra.generateReferenceSheetCanvas(buildGeoTerraOpts()).then(function (scv) {
           if (scv) scv.toBlob(function (b) { if (b) S.SatGeoTerra.triggerDownloadBlob(b, 'geoterra_ai_reference_sheet.png'); }, 'image/png');
-          else alert('أضف معلماً واحداً على الأقل في GeoTerra أولاً.');
+          else alert(langOf('panels') === 'ar' ? 'أضف معلماً واحداً على الأقل في GeoTerra أولاً.' : 'Add at least one GeoTerra feature first.');
         });
         break;
       case 'undo': doUndo(); break;
@@ -2384,7 +2441,7 @@ window.SOS = window.SOS || {};
       case 'auto_tone': autoMatchSoilTone(); break;
       case 'clear_patches': if (doc.patches.length) { pushUndo('Clear Patches'); doc.patches = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
       case 'clear_erases': if (doc.cleanupErases.length) { pushUndo('Clear Erases'); doc.cleanupErases = []; cleanupDirty = true; persistToIDB(); syncUI(); draw(); } break;
-      case 'clear_sat': if (confirm('Clear ALL Sat Studio layers, GIS, GeoTerra & IndexedDB?')) clearData(false); break;
+      case 'clear_sat': if (confirm('Clear ALL Sat Studio layers, GIS, GeoTerra & IndexedDB? (Language preferences stay saved)')) clearData(false); break;
       case 'fit': fitView(); break;
       case 'zoom_100': zoomNative100(); break;
       case 'toggle_left': if (wsCtrl) wsCtrl.toggleLeft(); break;
@@ -2397,12 +2454,9 @@ window.SOS = window.SOS || {};
       case 'toggle_grid': doc.gis.showGraticule = !doc.gis.showGraticule; persistToIDB(); draw(); break;
       case 'toggle_scalebar': doc.showScaleBar = !doc.showScaleBar; persistToIDB(); draw(); break;
       case 'toggle_theme': if (wsCtrl) wsCtrl.toggleTheme(); break;
+      case 'open_lang_settings':
       case 'toggle_lang':
-        doc.lang = doc.lang === 'ar' ? 'en' : 'ar';
-        if (menuCtrl) menuCtrl.setLang(doc.lang);
-        if (railCtrl) railCtrl.render(tool, doc.lang);
-        if (S.SatThemeUI) S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, doc.lang);
-        persistToIDB(); syncUI(); draw();
+        openLanguageSettings();
         break;
       case 'toggle_fullscreen':
         if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
@@ -2449,18 +2503,19 @@ window.SOS = window.SOS || {};
     return { doc: doc, baseImg: imgs.base, assetImgs: imgs.assets, siteName: (St && St.project && St.project.meta && St.project.meta.name) || 'Site', renderCleanupTo: renderCleanupLayerTo };
   }
   function buildGeoTerraOpts() {
-    return { state: doc.geoterra, baseImg: imgs.base, georefModel: georefModel, pxPerMeter: doc.calibration.pxPerMeter, lang: doc.lang };
+    return { state: doc.geoterra, baseImg: imgs.base, georefModel: georefModel, pxPerMeter: doc.calibration.pxPerMeter, lang: langOf('panels') };
   }
 
   function renderLayersPanel() {
     var box = ov.querySelector('#scLayersBox');
+    var ar = langOf('panels') === 'ar';
     var defs = [
-      { k: 'base',     lbl: '01_Base_Satellite',  tag: 'LOCKED', tc: 'lk' },
-      { k: 'cleanup',  lbl: '02_Ground_Cleanup',  tag: 'PHOTO',  tc: 'ok' },
-      { k: 'assets',   lbl: '03_Movable_Assets',  tag: 'ASSETS', tc: 'ok' },
-      { k: 'gis',      lbl: '04_ArcGIS_Vectors',  tag: 'ArcGIS', tc: 'gis' },
-      { k: 'geoterra', lbl: '05_GeoTerra_Survey', tag: 'FIELD',  tc: 'gt' },
-      { k: 'overlays', lbl: '06_Print_Overlays',  tag: 'PRINT',  tc: 'ok' }
+      { k: 'base',     lbl: ar ? '01_خريطة الأساس' : '01_Base_Satellite',   tag: ar ? 'مقفل' : 'LOCKED', tc: 'lk' },
+      { k: 'cleanup',  lbl: ar ? '02_تنظيف الأرضية' : '02_Ground_Cleanup',  tag: 'PHOTO',                tc: 'ok' },
+      { k: 'assets',   lbl: ar ? '03_العناصر المضافة' : '03_Movable_Assets', tag: 'ASSETS',              tc: 'ok' },
+      { k: 'gis',      lbl: ar ? '04_طبقات ArcGIS' : '04_ArcGIS_Vectors',   tag: 'ArcGIS',               tc: 'gis' },
+      { k: 'geoterra', lbl: ar ? '05_مسح GeoTerra' : '05_GeoTerra_Survey',  tag: 'FIELD',                tc: 'gt' },
+      { k: 'overlays', lbl: ar ? '06_دبابيس الطباعة' : '06_Print_Overlays', tag: 'PRINT',                tc: 'ok' }
     ];
     box.innerHTML = defs.map(function (d) {
       var vis = doc.layers[d.k] && doc.layers[d.k].visible !== false;
@@ -2480,28 +2535,32 @@ window.SOS = window.SOS || {};
 
   function renderAssetInspector() {
     var box = ov.querySelector('#scAssetInsp'), a = getSelAsset();
-    if (!a) { box.innerHTML = '<div class="mut">Select an asset on canvas or list to edit.</div>'; return; }
+    var ar = langOf('panels') === 'ar';
+    if (!a) {
+      box.innerHTML = '<div class="mut">' + (ar ? 'اختر عنصراً من الخريطة أو القائمة لتعديله.' : 'Select an asset on canvas or list to edit.') + '</div>';
+      return;
+    }
     var ppm = doc.calibration.pxPerMeter || 0;
     var fl = a.filters || { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 };
     var prHtml = (S.SatBlending && S.SatBlending.PRESETS)
       ? Object.keys(S.SatBlending.PRESETS).map(function (k) { return '<option value="' + k + '">' + esc(S.SatBlending.PRESETS[k].label) + '</option>'; }).join('')
       : '';
     box.innerHTML =
-      '<label>Asset Name<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
+      '<label>' + (ar ? 'اسم العنصر' : 'Asset Name') + '<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
       (ppm > 0 ? '<div class="satc-grid2"><label>W (m)<input type="number" id="saWm" step="0.1" value="' + (a.wPx / ppm).toFixed(2) + '"></label><label>H (m)<input type="number" id="saHm" step="0.1" value="' + (a.hPx / ppm).toFixed(2) + '"></label></div>' : '') +
       '<div class="satc-grid2"><label>W (px)<input type="number" id="saWpx" step="1" value="' + Math.round(a.wPx) + '"></label><label>H (px)<input type="number" id="saHpx" step="1" value="' + Math.round(a.hPx) + '"></label></div>' +
-      '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>Lock Aspect</label>' +
-      '<div class="satc-grid2"><label>Rot (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>°)<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '"></label><label>Op (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label></div>' +
-      '<div class="row"><button id="saFlipH">Flip H</button><button id="saFlipV">Flip V</button><button id="saLock">' + (a.locked ? 'Unlock' : 'Lock') + '</button></div>' +
-      '<div class="row"><button id="saUp">Up</button><button id="saDn">Down</button><button id="saDup" class="cy">Clone</button><button id="saAutoTone" class="on">Auto Tone</button></div>' +
-      '<select id="saPreset"><option value="">-- Surface Blend Preset --</option>' + prHtml + '</select>' +
-      '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>Shadow</label><label>Elev (m)<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
-      '<label>Bright (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" value="' + fl.brightness + '"></label>' +
-      '<label>Contrast (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" value="' + fl.contrast + '"></label>' +
-      '<label>Sat (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" value="' + fl.saturation + '"></label>' +
-      '<label>Warmth (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
-      '<label>Blur (<span id="saBlV">' + (fl.blurPx || 0) + '</span>px)<input type="range" id="saBl" min="0" max="2" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
-      '<button id="saDel" class="dng">Delete Asset</button>';
+      '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>' + (ar ? 'قفل التناسب' : 'Lock Aspect') + '</label>' +
+      '<div class="satc-grid2"><label>' + (ar ? 'تدوير' : 'Rot') + ' (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>°)<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '"></label><label>' + (ar ? 'شفافية' : 'Op') + ' (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label></div>' +
+      '<div class="row"><button id="saFlipH">' + (ar ? 'قلب أفقي' : 'Flip H') + '</button><button id="saFlipV">' + (ar ? 'قلب عمودي' : 'Flip V') + '</button><button id="saLock">' + (a.locked ? (ar ? 'فتح القفل' : 'Unlock') : (ar ? 'قفل' : 'Lock')) + '</button></div>' +
+      '<div class="row"><button id="saUp">' + (ar ? 'أعلى' : 'Up') + '</button><button id="saDn">' + (ar ? 'أسفل' : 'Down') + '</button><button id="saDup" class="cy">' + (ar ? 'نسخ' : 'Clone') + '</button><button id="saAutoTone" class="on">' + (ar ? 'تطابق لون' : 'Auto Tone') + '</button></div>' +
+      '<select id="saPreset"><option value="">' + (ar ? '-- نمط دمج السطح --' : '-- Surface Blend Preset --') + '</option>' + prHtml + '</select>' +
+      '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>' + (ar ? 'الظل' : 'Shadow') + '</label><label>' + (ar ? 'الارتفاع (م)' : 'Elev (m)') + '<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
+      '<label>' + (ar ? 'السطوع' : 'Bright') + ' (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" value="' + fl.brightness + '"></label>' +
+      '<label>' + (ar ? 'التباين' : 'Contrast') + ' (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" value="' + fl.contrast + '"></label>' +
+      '<label>' + (ar ? 'التشبع' : 'Sat') + ' (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" value="' + fl.saturation + '"></label>' +
+      '<label>' + (ar ? 'الدفء' : 'Warmth') + ' (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
+      '<label>' + (ar ? 'النعومة' : 'Blur') + ' (<span id="saBlV">' + (fl.blurPx || 0) + '</span>px)<input type="range" id="saBl" min="0" max="2" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
+      '<button id="saDel" class="dng">' + (ar ? 'حذف العنصر' : 'Delete Asset') + '</button>';
 
     box.querySelector('#saName').onchange = function () { pushUndo('Rename Asset'); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
     box.querySelector('#saLockAsp').onchange = function () { a.lockAspect = !!this.checked; persistToIDB(); };
@@ -2550,6 +2609,7 @@ window.SOS = window.SOS || {};
   function renderBottomDrawerContent() {
     if (!ov) return;
     var body = ov.querySelector('#scBotBody');
+    var ar = langOf('panels') === 'ar';
     [].forEach.call(ov.querySelectorAll('[data-btab]'), function (b) { b.classList.toggle('on', b.dataset.btab === bottomTabMode); });
     if (bottomTabMode === 'attr' && S.SatArcGIS) {
       S.SatArcGIS.renderAttributeTable(body, {
@@ -2567,8 +2627,8 @@ window.SOS = window.SOS || {};
           onZoom: function (id) { var f = getGisById(id); if (f) { var st = S.SatArcGIS.polyStats(f.points, doc.calibration.pxPerMeter); panToImgPt(st.cx, st.cy); draw(); } },
           onEdit: function (id) {
             var f = getGisById(id); if (!f) return;
-            var nm = prompt('Feature Name:', f.name || ''); if (nm !== null) f.name = nm.trim() || f.name;
-            var nt = prompt('Notes:', f.notes || ''); if (nt !== null) f.notes = nt.trim();
+            var nm = prompt(ar ? 'اسم المعلم:' : 'Feature Name:', f.name || ''); if (nm !== null) f.name = nm.trim() || f.name;
+            var nt = prompt(ar ? 'ملاحظات:' : 'Notes:', f.notes || ''); if (nt !== null) f.notes = nt.trim();
             persistToIDB(); renderBottomDrawerContent(); draw();
           },
           onDelete: function (id) { pushUndo('Delete GIS Feature'); doc.gis.features = doc.gis.features.filter(function (f) { return f.id !== id; }); selGisIds = selGisIds.filter(function (x) { return x !== id; }); persistToIDB(); renderBottomDrawerContent(); draw(); },
@@ -2598,15 +2658,16 @@ window.SOS = window.SOS || {};
         ? '<div class="satc-alist" style="max-height:100%">' + undoStack.slice().reverse().map(function (it, ri) {
             var idx = undoStack.length - 1 - ri;
             var lbl = typeof it === 'string' ? ('State #' + (idx + 1)) : (it.label + ' (' + it.ts + ')');
-            return '<div class="satc-ait" data-hist="' + idx + '"><span>' + esc(lbl) + '</span><span class="satc-tag">Restore</span></div>';
+            return '<div class="satc-ait" data-hist="' + idx + '"><span>' + esc(lbl) + '</span><span class="satc-tag">' + (ar ? 'استعادة' : 'Restore') + '</span></div>';
           }).join('') + '</div>'
-        : '<div class="mut">No history entries yet.</div>';
+        : '<div class="mut">' + (ar ? 'لا توجد تعديلات محفوظة بعد.' : 'No history entries yet.') + '</div>';
       [].forEach.call(body.querySelectorAll('[data-hist]'), function (el) { el.onclick = function () { jumpToHistoryIndex(+el.dataset.hist); }; });
     }
   }
 
   function syncUI() {
     if (!ov) return;
+    var ar = langOf('panels') === 'ar';
     setIdbBadge(idbStatus);
     renderLayersPanel();
 
@@ -2614,7 +2675,7 @@ window.SOS = window.SOS || {};
     if (imgs.base && doc.base.width) {
       bi.innerHTML = '<b>' + esc(doc.base.name || 'Satellite') + '</b><div>' + doc.base.width + '×' + doc.base.height + ' px (' + ((doc.base.width * doc.base.height) / 1e6).toFixed(2) + ' MP)</div>';
     } else {
-      bi.innerHTML = '<span class="mut">No base satellite image loaded yet.</span>';
+      bi.innerHTML = '<span class="mut">' + (ar ? 'لم يتم تحميل خريطة أساس بعد.' : 'No base satellite image loaded yet.') + '</span>';
     }
 
     var bldBox = ov.querySelector('#scBuildBox');
@@ -2628,7 +2689,7 @@ window.SOS = window.SOS || {};
     var al = ov.querySelector('#scAssetList');
     al.innerHTML = doc.assets.length ? doc.assets.slice().reverse().map(function (a) {
       return '<div class="satc-ait' + (a.id === selAssetId ? ' sel' : '') + '" data-aid="' + esc(a.id) + '"><input type="checkbox" data-avis="' + esc(a.id) + '"' + (a.visible ? ' checked' : '') + '><span>' + esc(a.name) + '</span></div>';
-    }).join('') : '<div class="mut">No assets added yet.</div>';
+    }).join('') : '<div class="mut">' + (ar ? 'لا توجد عناصر مضافة بعد.' : 'No assets added yet.') + '</div>';
     [].forEach.call(al.querySelectorAll('[data-aid]'), function (el) {
       el.onclick = function (ev) { if (ev.target.dataset && ev.target.dataset.avis) return; clearAllSelections(); selAssetId = el.dataset.aid; syncUI(); draw(); };
     });
@@ -2639,13 +2700,13 @@ window.SOS = window.SOS || {};
     renderAssetInspector();
 
     var p1 = calibDraft.p1 || doc.calibration.p1, p2 = calibDraft.p2 || doc.calibration.p2;
-    ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0 ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m') : 'Uncalibrated';
-    ov.querySelector('#scCalPx').textContent = (p1 && p2) ? (Math.hypot(p2.x - p1.x, p2.y - p1.y).toFixed(1) + ' px') : 'Not picked';
+    ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0 ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m') : (ar ? 'غير معاير' : 'Uncalibrated');
+    ov.querySelector('#scCalPx').textContent = (p1 && p2) ? (Math.hypot(p2.x - p1.x, p2.y - p1.y).toFixed(1) + ' px') : (ar ? 'غير محدد' : 'Not picked');
     if (document.activeElement !== ov.querySelector('#scNorthDeg')) ov.querySelector('#scNorthDeg').value = doc.overlays.northDeg || 0;
 
     if (S.SatGeoTerra) {
       S.SatGeoTerra.renderGeoTerraPanel(ov.querySelector('#scGtPanel'), {
-        state: doc.geoterra, lang: doc.lang, georefModel: georefModel, gpsStatus: gpsStatusTxt,
+        state: doc.geoterra, lang: langOf('panels'), georefModel: georefModel, gpsStatus: gpsStatusTxt,
         callbacks: {
           onTool: setTool,
           onCloseBoundary: function () { pushUndo('Close Boundary'); doc.geoterra.boundaryClosed = true; persistToIDB(); syncUI(); draw(); },
@@ -2661,7 +2722,7 @@ window.SOS = window.SOS || {};
           },
           onPushToArcGIS: function () {
             var added = S.SatGeoTerra.convertToArcGISFeatures(doc.geoterra);
-            if (!added.length) { alert('لا توجد معالم GeoTerra للنقل.'); return; }
+            if (!added.length) { alert(ar ? 'لا توجد معالم GeoTerra للنقل.' : 'No GeoTerra features to push.'); return; }
             pushUndo('Push GeoTerra to ArcGIS'); added.forEach(function (f) { doc.gis.features.push(f); });
             doc.layers.gis.visible = true; persistToIDB(); syncUI(); draw();
             setStatus('Pushed ' + added.length + ' GeoTerra item(s) to ArcGIS layer.', false);
@@ -2673,7 +2734,7 @@ window.SOS = window.SOS || {};
           },
           onEditFeature: function (idx) { var f = doc.geoterra.features[idx]; if (f) openGeoTerraModalFor(f.points, f.geometry, idx); },
           onDeleteFeature: function (idx) {
-            if (!confirm('Delete GeoTerra feature?')) return;
+            if (!confirm(ar ? 'حذف معلم GeoTerra؟' : 'Delete GeoTerra feature?')) return;
             pushUndo('Delete GeoTerra Feature'); doc.geoterra.features.splice(idx, 1);
             if (selGtIdx === idx) selGtIdx = -1;
             persistToIDB(); syncUI(); draw();
@@ -2723,24 +2784,27 @@ window.SOS = window.SOS || {};
           '<div class="satc-lsub">' +
             '<div class="satc-guide" id="scToolGuide"></div>' +
             '<div id="scBuildBox" class="satc-card" style="display:none;border-color:var(--sc-cyan)">' +
-              '<b>Active Polygon / Line (<span id="scBuildPtsV">0</span> pts)</b>' +
-              '<label>Edge Feather (<span id="scCutFeaV">2</span>px)<input type="range" id="scCutFea" min="0" max="10" step="0.5" value="2"></label>' +
-              '<div class="satc-grid2"><button id="scBuildExec" class="on">Apply / Finish</button><button id="scBuildUndo">Undo Pt</button></div>' +
-              '<button id="scBuildCan" class="dng">Cancel</button>' +
+              '<b><span data-i18n="active_poly">Active Polygon / Line</span> (<span id="scBuildPtsV">0</span> pts)</b>' +
+              '<label><span data-i18n="edge_feather">Edge Feather</span> (<span id="scCutFeaV">2</span>px)<input type="range" id="scCutFea" min="0" max="10" step="0.5" value="2"></label>' +
+              '<div class="satc-grid2"><button id="scBuildExec" class="on" data-i18n="btn_apply">Apply / Finish</button><button id="scBuildUndo" data-i18n="btn_undo_pt">Undo Pt</button></div>' +
+              '<button id="scBuildCan" class="dng" data-i18n="btn_cancel">Cancel</button>' +
             '</div>' +
             '<div class="satc-card">' +
-              '<b>Photo Brush, Clone &amp; Wand</b>' +
-              '<div class="satc-grid2"><label>Color<input type="color" id="scPhotoCol" value="#c5a267"></label><label>Wand Tol (<span id="scPhotoTolV">28</span>)<input type="range" id="scPhotoTol" min="5" max="140" value="28"></label></div>' +
-              '<label class="ck"><input type="checkbox" id="scPhotoCont" checked>Contiguous Wand</label>' +
-              '<label>Radius (<span id="scRadV">28</span>px)<input type="range" id="scRad" min="4" max="180" value="28"></label>' +
-              '<label>Feather (<span id="scFeaV">65</span>%)<input type="range" id="scFea" min="5" max="100" value="65"></label>' +
-              '<div class="satc-grid2"><button id="scPickSrc" class="cy">Pick Clone Src</button><button id="scAddPngBtn" class="on">+ PNG Asset</button></div>' +
+              '<b data-i18n="photo_tools_h">Photo Brush, Clone &amp; Wand</b>' +
+              '<div class="satc-grid2">' +
+                '<label><span data-i18n="lbl_color">Color</span><input type="color" id="scPhotoCol" value="#c5a267"></label>' +
+                '<label><span data-i18n="lbl_wand_tol">Wand Tol</span> (<span id="scPhotoTolV">28</span>)<input type="range" id="scPhotoTol" min="5" max="140" value="28"></label>' +
+              '</div>' +
+              '<label class="ck"><input type="checkbox" id="scPhotoCont" checked><span data-i18n="lbl_contig">Contiguous Wand</span></label>' +
+              '<label><span data-i18n="lbl_radius">Radius</span> (<span id="scRadV">28</span>px)<input type="range" id="scRad" min="4" max="180" value="28"></label>' +
+              '<label><span data-i18n="lbl_feather">Feather</span> (<span id="scFeaV">65</span>%)<input type="range" id="scFea" min="5" max="100" value="65"></label>' +
+              '<div class="satc-grid2"><button id="scPickSrc" class="cy" data-i18n="btn_pick_src">Pick Clone Src</button><button id="scAddPngBtn" class="on" data-i18n="btn_add_png">+ PNG Asset</button></div>' +
             '</div>' +
             '<div class="satc-card">' +
-              '<b>ArcGIS Digitizing</b>' +
-              '<label>Category<select id="scGisCat">' + gisCatOpts + '</select></label>' +
-              '<label class="ck"><input type="checkbox" id="scSnapOn" checked>Snapping (Vertex/Mid/Edge)</label>' +
-              '<div class="satc-grid2"><button id="scCogoBtn" class="cy">COGO Dist+Brg</button><button id="scAttrBtn">Attribute Table</button></div>' +
+              '<b data-i18n="arcgis_dig_h">ArcGIS Digitizing</b>' +
+              '<label><span data-i18n="lbl_category">Category</span><select id="scGisCat">' + gisCatOpts + '</select></label>' +
+              '<label class="ck"><input type="checkbox" id="scSnapOn" checked><span data-i18n="lbl_snapping">Snapping (Vertex/Mid/Edge)</span></label>' +
+              '<div class="satc-grid2"><button id="scCogoBtn" class="cy" data-i18n="btn_cogo">COGO Dist+Brg</button><button id="scAttrBtn" data-i18n="btn_attr_tbl">Attribute Table</button></div>' +
             '</div>' +
           '</div>' +
         '</aside>' +
@@ -2753,16 +2817,16 @@ window.SOS = window.SOS || {};
             '<button type="button" class="satc-edge-btn r" title="Hide/Show Right Layers">▶</button>' +
             '<div class="satc-swipe"><div class="satc-swipe-knob">⇄</div></div>' +
             '<div class="satc-cleanbar">' +
-              '<button type="button" class="satc-qbtn on" id="scExitClean">Show Panels</button>' +
-              '<button type="button" class="satc-qbtn" id="scCleanGps">🛰 Drop GPS</button>' +
-              '<button type="button" class="satc-qbtn" id="scCleanUndo">↩ Undo</button>' +
+              '<button type="button" class="satc-qbtn on" id="scExitClean" data-i18n="btn_show_panels">Show Panels</button>' +
+              '<button type="button" class="satc-qbtn" id="scCleanGps" data-i18n="btn_drop_gps">🛰 Drop GPS</button>' +
+              '<button type="button" class="satc-qbtn" id="scCleanUndo" data-i18n="btn_undo">↩ Undo</button>' +
             '</div>' +
           '</div>' +
           '<div class="satc-bottom">' +
             '<div class="satc-btabs">' +
-              '<button type="button" class="satc-btab on" data-btab="attr">ArcGIS Attribute Table</button>' +
-              '<button type="button" class="satc-btab" data-btab="gcp">GCP Georef Link Table</button>' +
-              '<button type="button" class="satc-btab" data-btab="hist">History</button>' +
+              '<button type="button" class="satc-btab on" data-btab="attr" data-i18n="tab_attr">ArcGIS Attribute Table</button>' +
+              '<button type="button" class="satc-btab" data-btab="gcp" data-i18n="tab_gcp">GCP Georef Link Table</button>' +
+              '<button type="button" class="satc-btab" data-btab="hist" data-i18n="tab_hist">History</button>' +
               '<span style="flex:1"></span>' +
               '<button type="button" class="satc-qbtn dng" id="scBotClose">×</button>' +
             '</div>' +
@@ -2771,40 +2835,52 @@ window.SOS = window.SOS || {};
         '</div>' +
 
         '<aside class="satc-right">' +
-          '<div class="satc-sec-h"><span>Layers (Independent Visibility)</span></div>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_layers">Layers (Independent Visibility)</span></div>' +
           '<div id="scLayersBox" style="display:flex;flex-direction:column;gap:4px"></div>' +
           '<div id="scBaseInfo" class="satc-card"></div>' +
 
-          '<div class="satc-sec-h"><span>Scale Bar &amp; True North</span></div>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_scale">Scale Bar &amp; True North</span></div>' +
           '<div class="satc-card">' +
-            '<div>Scale: <b id="scCalStat">Uncalibrated</b> | Line: <b id="scCalPx">Not picked</b></div>' +
-            '<div class="satc-grid2"><label>Known (m)<input type="number" id="scCalM" step="0.1" value="10"></label><label>North (°)<input type="number" id="scNorthDeg" step="0.5" value="0"></label></div>' +
-            '<div class="satc-grid2"><button id="scPickCal" class="cy">Pick 2-Pt Scale</button><button id="scApplyCal" class="on">Apply Scale</button></div>' +
-            '<div class="satc-grid2"><button id="scPickBrg" class="amb">Calibrate North</button><button id="scResetCal" class="dng">Clear Scale</button></div>' +
+            '<div><span data-i18n="lbl_scale">Scale:</span> <b id="scCalStat">Uncalibrated</b> | <span data-i18n="lbl_line">Line:</span> <b id="scCalPx">Not picked</b></div>' +
+            '<div class="satc-grid2">' +
+              '<label><span data-i18n="lbl_known_m">Known (m)</span><input type="number" id="scCalM" step="0.1" value="10"></label>' +
+              '<label><span data-i18n="lbl_north_deg">North (°)</span><input type="number" id="scNorthDeg" step="0.5" value="0"></label>' +
+            '</div>' +
+            '<div class="satc-grid2"><button id="scPickCal" class="cy" data-i18n="btn_pick_scale">Pick 2-Pt Scale</button><button id="scApplyCal" class="on" data-i18n="btn_apply_scale">Apply Scale</button></div>' +
+            '<div class="satc-grid2"><button id="scPickBrg" class="amb" data-i18n="btn_cal_north">Calibrate North</button><button id="scResetCal" class="dng" data-i18n="btn_clear_scale">Clear Scale</button></div>' +
           '</div>' +
 
-          '<div class="satc-sec-h"><span>03_Movable_Assets &amp; Inspector</span></div>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_assets">03_Movable_Assets &amp; Inspector</span></div>' +
           '<div id="scAssetList" class="satc-alist"></div>' +
           '<div id="scAssetInsp" class="satc-card"></div>' +
 
-          '<div class="satc-sec-h"><span>Global Sun Shadow</span></div>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_sun">Global Sun Shadow</span></div>' +
           '<div class="satc-card">' +
-            '<div class="satc-grid2"><label>Az (<span id="scSunAzV">135</span>°)<input type="range" id="scSunAz" min="0" max="359" value="135"></label><label>Len (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label></div>' +
-            '<div class="satc-grid2"><label>Op (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" value="38"></label><label>Blur (<span id="scSunBlV">4</span>px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label></div>' +
+            '<div class="satc-grid2">' +
+              '<label><span data-i18n="lbl_az">Az</span> (<span id="scSunAzV">135</span>°)<input type="range" id="scSunAz" min="0" max="359" value="135"></label>' +
+              '<label><span data-i18n="lbl_len">Len</span> (<span id="scSunLenV">0.75</span>x)<input type="range" id="scSunLen" min="0" max="2.5" step="0.05" value="0.75"></label>' +
+            '</div>' +
+            '<div class="satc-grid2">' +
+              '<label><span data-i18n="lbl_op">Op</span> (<span id="scSunOpV">38</span>%)<input type="range" id="scSunOp" min="0" max="85" value="38"></label>' +
+              '<label><span data-i18n="lbl_blur">Blur</span> (<span id="scSunBlV">4</span>px)<input type="range" id="scSunBl" min="0" max="16" step="0.5" value="4"></label>' +
+            '</div>' +
           '</div>' +
 
-          '<div class="satc-sec-h"><span>GeoTerra Field Survey</span></div>' +
-          '<button type="button" id="scImpGtDirect" class="satc-qbtn amb" style="width:100%">⬆️ استيراد جلسة GeoTerra (.json / .zip)</button>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_geoterra">GeoTerra Field Survey</span></div>' +
+          '<button type="button" id="scImpGtDirect" class="satc-qbtn amb" style="width:100%" data-i18n="btn_imp_gt">⬆ Import GeoTerra Session (.json / .zip)</button>' +
           '<div id="scGtPanel"></div>' +
 
-          '<div class="satc-sec-h"><span>Print Poster &amp; Dual Export</span></div>' +
+          '<div class="satc-sec-h"><span data-i18n="sec_export">Print Poster &amp; Dual Export</span></div>' +
           '<div class="satc-card">' +
-            '<label>Poster Title EN<input type="text" id="scTitEn" placeholder="Site Updated Map"></label>' +
-            '<label>Poster Title AR<input type="text" id="scTitAr" dir="rtl" placeholder="خريطة الموقع المحدّثة"></label>' +
-            '<div class="satc-grid2"><label>Paper<select id="scPaper"></select></label><label>DPI<select id="scDpi"><option value="150">150</option><option value="200" selected>200</option><option value="300">300</option></select></label></div>' +
+            '<label><span data-i18n="lbl_tit_en">Poster Title EN</span><input type="text" id="scTitEn" placeholder="Site Updated Map"></label>' +
+            '<label><span data-i18n="lbl_tit_ar">Poster Title AR</span><input type="text" id="scTitAr" dir="rtl" placeholder="خريطة الموقع المحدّثة"></label>' +
+            '<div class="satc-grid2">' +
+              '<label><span data-i18n="lbl_paper">Paper</span><select id="scPaper"></select></label>' +
+              '<label><span data-i18n="lbl_dpi">DPI</span><select id="scDpi"><option value="150">150</option><option value="200" selected>200</option><option value="300">300</option></select></label>' +
+            '</div>' +
             '<div id="scRamEst" style="font-size:10px;color:var(--sc-mut)"></div>' +
-            '<div class="satc-grid2"><button id="scExpClean" class="on">1. Clean 2D PNG</button><button id="scExpPoster" class="amb">2. Poster PNG</button></div>' +
-            '<div class="satc-grid2"><button id="scPushCad" class="cy">Push ➔ 2D CAD</button><button id="scSend3D" class="on">Open in 3D GPU</button></div>' +
+            '<div class="satc-grid2"><button id="scExpClean" class="on" data-i18n="btn_exp_clean">1. Clean 2D PNG</button><button id="scExpPoster" class="amb" data-i18n="btn_exp_poster">2. Poster PNG</button></div>' +
+            '<div class="satc-grid2"><button id="scPushCad" class="cy" data-i18n="btn_push_cad">Push ➔ 2D CAD</button><button id="scSend3D" class="on" data-i18n="btn_open_3d">Open in 3D GPU</button></div>' +
           '</div>' +
         '</aside>' +
       '</div>' +
@@ -2827,13 +2903,18 @@ window.SOS = window.SOS || {};
     bindCanvas();
 
     if (S.SatThemeUI) {
-      menuCtrl = S.SatThemeUI.buildMenuBar(ov.querySelector('#scMenuBar'), { lang: doc.lang, onAction: handleMenuAction });
-      railCtrl = S.SatThemeUI.buildLeftIconRail(ov.querySelector('#scIconRail'), {
-        lang: doc.lang, onSelectTool: setTool,
-        onHoverTool: function (tid) { S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, doc.lang); }
+      menuCtrl = S.SatThemeUI.buildMenuBar(ov.querySelector('#scMenuBar'), {
+        lang: langOf('menus'),
+        langPrefs: doc.langPrefs,
+        onAction: handleMenuAction
       });
-      S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, doc.lang);
+      railCtrl = S.SatThemeUI.buildLeftIconRail(ov.querySelector('#scIconRail'), {
+        lang: langOf('guide'),
+        onSelectTool: setTool,
+        onHoverTool: function (tid) { S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, langOf('guide')); }
+      });
       wsCtrl = S.SatThemeUI.createWorkspaceController(ov, { onResize: resize, onSwipeChange: draw });
+      applyLanguagePrefsUI();
     }
 
     ov.querySelector('#scFileBase').onchange = function () { if (this.files[0]) importBaseFile(this.files[0]); };
@@ -2917,6 +2998,7 @@ window.SOS = window.SOS || {};
       isOpen = true;
       ov.classList.remove('hide');
       resize();
+      applyLanguagePrefsUI();
       if (getBaseDims().w && view.s === 1 && view.ox === 0 && view.oy === 0) fitView();
       syncUI(); draw();
       document.addEventListener('keydown', onKeyDown);
@@ -2970,7 +3052,7 @@ window.SOS = window.SOS || {};
       decodeAllImages(snapGen, function () {
         if (snapGen !== opGen) return;
         cleanupDirty = true; persistToIDB();
-        if (isOpen) { fitView(); syncUI(); draw(); }
+        if (isOpen) { applyLanguagePrefsUI(); fitView(); syncUI(); draw(); }
       });
       return true;
     } catch (err) { return false; }
@@ -2989,7 +3071,7 @@ window.SOS = window.SOS || {};
       cloneCfg.src = null; cloneCfg.pickMode = false;
       wipeIDB();
       if (!silent) setStatus('Sat Studio cleared.', false);
-      if (isOpen) { syncUI(); draw(); }
+      if (isOpen) { applyLanguagePrefsUI(); syncUI(); draw(); }
     } catch (err) {}
   }
 
