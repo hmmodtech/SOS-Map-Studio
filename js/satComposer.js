@@ -19,10 +19,23 @@ window.SOS = window.SOS || {};
     });
   }
 
+  function safeNormLang(raw) {
+    if (S.SatThemeUI && typeof S.SatThemeUI.normalizeLangPrefs === 'function') {
+      return S.SatThemeUI.normalizeLangPrefs(raw);
+    }
+    var r = (raw && typeof raw === 'object') ? raw : {};
+    return {
+      menus:  r.menus  === 'ar' ? 'ar' : 'en',
+      guide:  r.guide  === 'ar' ? 'ar' : 'en',
+      panels: r.panels === 'ar' ? 'ar' : 'en'
+    };
+  }
+
   function defaultLangPrefs() {
-    return (S.SatThemeUI && S.SatThemeUI.loadLangPrefs)
-      ? S.SatThemeUI.loadLangPrefs()
-      : { menus: 'en', guide: 'en', panels: 'en' };
+    if (S.SatThemeUI && typeof S.SatThemeUI.loadLangPrefs === 'function') {
+      return S.SatThemeUI.loadLangPrefs();
+    }
+    return { menus: 'en', guide: 'en', panels: 'en' };
   }
 
   function blankDoc() {
@@ -90,7 +103,7 @@ window.SOS = window.SOS || {};
   var ptrs = {}, drag = null, space = false, hovImg = null, snapPreview = null;
   var calibDraft = { p1: null, p2: null }, bearingDraft = { p1: null, p2: null };
   var measPts = [], cutPts = [], gisDraftPts = [], gtDraftPts = [];
-  var cutFeatherPx = 2;
+  var cutFeatherPx = 3, autoHealOnLift = true, edgeSoftenPx = 3;
   var cloneCfg = { src: null, pickMode: false, radius: 28, feather: 0.65, opacity: 1.0, rotDeg: 0, followDrag: true };
   var eraseCfg = { radius: 28, feather: 0.65, opacity: 1.0 };
   var photoCfg = { color: '#c5a267', radius: 18, hardness: 0.5, opacity: 0.75, tolerance: 28, contiguous: true };
@@ -238,9 +251,7 @@ window.SOS = window.SOS || {};
   function mergeDoc(raw) {
     var b = blankDoc();
     if (!raw || typeof raw !== 'object') return b;
-    var lp = (raw.langPrefs && S.SatThemeUI)
-      ? S.SatThemeUI.normalizeLangPrefs(raw.langPrefs)
-      : defaultLangPrefs();
+    var lp = raw.langPrefs ? safeNormLang(raw.langPrefs) : defaultLangPrefs();
     var gisRaw = raw.gis || {};
     var gisFeats = Array.isArray(gisRaw.features)
       ? gisRaw.features.map(function (f) { return S.SatArcGIS ? S.SatArcGIS.createFeature(f) : f; })
@@ -763,13 +774,13 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 5. PHOTOSHOP TOOLS, AUTO-MATCH SOIL TONE & PROCEDURAL ASSETS
+  // 5. PHOTOSHOP TOOLS, LIFT & AUTO-HEAL GROUND, EDGE SOFTEN & ASSETS
   // =========================================================================
   function replaceAssetImageDataUrl(asset, newDataUrl, newDims, statusText) {
     decodeImage(newDataUrl, function (err, im) {
       if (err || !im || !im.naturalWidth) { setStatus('Failed to update image.', true); return; }
       pushUndo(statusText || 'Edit Asset Image');
-      var binId = asset.binId || uid('abin');
+      var binId = uid('abin');
       bins.assets[binId] = newDataUrl; imgs.assets[binId] = im;
       asset.binId = binId; asset.naturalW = im.naturalWidth; asset.naturalH = im.naturalHeight;
       if (newDims) {
@@ -874,8 +885,191 @@ window.SOS = window.SOS || {};
       a.filters.saturation = Math.round(clamp(a.filters.saturation || 90, 75, 110));
       a.filters.blurPx = Math.max(a.filters.blurPx || 0, 0.4);
       persistToIDB(); syncUI(); draw();
-      setStatus('Auto-matched asset tone.', false);
+      setStatus(langOf('panels') === 'ar' ? 'تمت مطابقة ألوان العنصر مع التربة المحيطة.' : 'Auto-matched asset tone with surrounding ground.', false);
     } catch (e) { setStatus('Auto-match error: ' + e.message, true); }
+  }
+
+  function softenAssetEdges(asset, featherPx) {
+    if (!asset || !imgs.assets[asset.binId]) return;
+    var im = imgs.assets[asset.binId], w = im.naturalWidth, h = im.naturalHeight;
+    var fPx = clamp(+featherPx || 3, 1, 14);
+    var d = Math.min(Math.max(1, Math.round(fPx * 0.55)), Math.max(1, Math.floor(Math.min(w, h) * 0.14)));
+
+    var sil = document.createElement('canvas'); sil.width = w; sil.height = h;
+    var sctx = sil.getContext('2d');
+    sctx.drawImage(im, 0, 0);
+    sctx.globalCompositeOperation = 'source-in';
+    sctx.fillStyle = '#ffffff'; sctx.fillRect(0, 0, w, h);
+
+    var er = document.createElement('canvas'); er.width = w; er.height = h;
+    var ectx = er.getContext('2d');
+    ectx.drawImage(sil, 0, 0);
+    ectx.globalCompositeOperation = 'destination-in';
+    ectx.drawImage(sil, -d, 0); ectx.drawImage(sil, d, 0);
+    ectx.drawImage(sil, 0, -d); ectx.drawImage(sil, 0, d);
+
+    var mask = document.createElement('canvas'); mask.width = w; mask.height = h;
+    var mctx = mask.getContext('2d');
+    if ('filter' in mctx) mctx.filter = 'blur(' + fPx + 'px)';
+    mctx.drawImage(er, 0, 0); mctx.filter = 'none';
+
+    var out = document.createElement('canvas'); out.width = w; out.height = h;
+    var octx = out.getContext('2d');
+    octx.drawImage(im, 0, 0);
+    octx.globalCompositeOperation = 'destination-in';
+    octx.drawImage(mask, 0, 0);
+
+    var url = out.toDataURL('image/png');
+    sil.width = er.width = mask.width = out.width = 0;
+    sil.height = er.height = mask.height = out.height = 0;
+    replaceAssetImageDataUrl(
+      asset, url, null,
+      langOf('panels') === 'ar' ? ('تم تنعيم حواف العنصر (' + fPx + 'px).') : ('Softened asset edges (' + fPx + 'px).')
+    );
+  }
+
+  function distPtToPolyEdges(pt, poly) {
+    var best = Infinity;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var a = poly[j], b = poly[i], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1;
+      var t = clamp(((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2, 0, 1);
+      var d = Math.hypot(pt.x - (a.x + dx * t), pt.y - (a.y + dy * t));
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  function autoHealPolygonGround(pts, skipUndo) {
+    if (!imgs.base || !pts || pts.length < 3) return 0;
+    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, cx = 0, cy = 0;
+    pts.forEach(function (p) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      cx += p.x; cy += p.y;
+    });
+    cx /= pts.length; cy /= pts.length;
+    var bw = Math.max(8, maxX - minX), bh = Math.max(8, maxY - minY), maxDim = Math.max(bw, bh);
+    var r = clamp(Math.round(maxDim * 0.25), 14, 96);
+    var step = Math.max(10, Math.round(r * 0.62));
+    while ((Math.ceil(bw / step) + 2) * (Math.ceil(bh / step) + 2) > 110) {
+      step = Math.round(step * 1.22);
+      r = Math.min(130, Math.round(r * 1.15));
+    }
+
+    var added = [];
+    for (var gy = minY - r * 0.15; gy <= maxY + r * 0.15; gy += step) {
+      for (var gx = minX - r * 0.15; gx <= maxX + r * 0.15; gx += step) {
+        var gp = { x: gx, y: gy };
+        if (!pointInPolyLocal(gp, pts) && distPtToPolyEdges(gp, pts) > r * 0.35) continue;
+        var vx = gx - cx, vy = gy - cy, vl = Math.hypot(vx, vy);
+        var ux = vl > 1 ? vx / vl : 1, uy = vl > 1 ? vy / vl : 0;
+        var sx = gx, sy = gy, walk = 0, maxWalk = maxDim * 1.6 + r * 2;
+        while (walk < maxWalk && pointInPolyLocal({ x: sx, y: sy }, pts)) {
+          walk += Math.max(4, r * 0.35);
+          sx = gx + ux * walk; sy = gy + uy * walk;
+        }
+        sx = clamp(sx + ux * (r * 1.05), r, Math.max(r, iw - r));
+        sy = clamp(sy + uy * (r * 1.05), r, Math.max(r, ih - r));
+        if (pointInPolyLocal({ x: sx, y: sy }, pts)) {
+          for (var aIdx = 0; aIdx < 8; aIdx++) {
+            var ang = (aIdx * Math.PI) / 4;
+            var tx = clamp(cx + Math.cos(ang) * (maxDim * 0.72 + r), r, Math.max(r, iw - r));
+            var ty = clamp(cy + Math.sin(ang) * (maxDim * 0.72 + r), r, Math.max(r, ih - r));
+            if (!pointInPolyLocal({ x: tx, y: ty }, pts)) { sx = tx; sy = ty; break; }
+          }
+        }
+        added.push({
+          id: uid('ptc'), sx: +sx.toFixed(1), sy: +sy.toFixed(1),
+          dx: +clamp(gx, 0, iw).toFixed(1), dy: +clamp(gy, 0, ih).toFixed(1),
+          r: r, feather: 0.78, opacity: 0.96, rotDeg: 0
+        });
+      }
+    }
+    if (!added.length) return 0;
+    if (!skipUndo) pushUndo('Auto-Heal Ground');
+    added.forEach(function (p) { doc.patches.push(p); });
+    doc.layers.cleanup.visible = true;
+    cleanupDirty = true;
+    return added.length;
+  }
+
+  function healUnderSelectedAsset() {
+    var a = getSelAsset();
+    if (!a || !imgs.base) { setStatus('Select an asset with Base Satellite loaded first.', true); return; }
+    var hw = a.wPx / 2, hh = a.hPx / 2;
+    var quad = [
+      assetLocalToImg(a, -hw, -hh), assetLocalToImg(a, hw, -hh),
+      assetLocalToImg(a, hw, hh), assetLocalToImg(a, -hw, hh)
+    ];
+    var cnt = autoHealPolygonGround(quad, false);
+    if (cnt > 0) {
+      persistToIDB(); syncUI(); draw();
+      setStatus(langOf('panels') === 'ar' ? ('تم تنظيف الخلفية تحت «' + a.name + '» تلقائياً.') : ('Auto-healed ground under "' + a.name + '".'), false);
+    }
+  }
+
+  function liftPolygonFromBase(pts, label, autoHealBg, featherPx) {
+    if (!imgs.base) {
+      alert(langOf('panels') === 'ar' ? 'حمّل صورة القمر الصناعي (خريطة الأساس) أولاً لاستخراج المعلم منها.' : 'Import Base Satellite image first to lift & edit this object.');
+      return;
+    }
+    if (!pts || pts.length < 3) { setStatus('Polygon must have at least 3 points.', true); return; }
+    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    pts.forEach(function (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+    var fPx = clamp(featherPx != null ? +featherPx : cutFeatherPx, 0, 10), pad = Math.ceil(fPx * 2) + 2;
+    var x0 = Math.max(0, Math.floor(minX - pad)), y0 = Math.max(0, Math.floor(minY - pad));
+    var x1 = Math.min(iw, Math.ceil(maxX + pad)), y1 = Math.min(ih, Math.ceil(maxY + pad));
+    var bw = x1 - x0, bh = y1 - y0;
+    if (bw < 4 || bh < 4 || bw > MAX_SAFE_EDGE || bh > MAX_SAFE_EDGE) { setStatus('Invalid cutout bounds.', true); return; }
+
+    var cutCv = document.createElement('canvas'); cutCv.width = bw; cutCv.height = bh;
+    var cctx = cutCv.getContext('2d'); cctx.drawImage(imgs.base, x0, y0, bw, bh, 0, 0, bw, bh);
+    var maskCv = document.createElement('canvas'); maskCv.width = bw; maskCv.height = bh;
+    var mctx = maskCv.getContext('2d'); mctx.beginPath();
+    pts.forEach(function (p, i) { if (i === 0) mctx.moveTo(p.x - x0, p.y - y0); else mctx.lineTo(p.x - x0, p.y - y0); });
+    mctx.closePath();
+    if (fPx > 0 && 'filter' in mctx) mctx.filter = 'blur(' + fPx + 'px)';
+    mctx.fillStyle = '#fff'; mctx.fill(); mctx.filter = 'none';
+    cctx.globalCompositeOperation = 'destination-in'; cctx.drawImage(maskCv, 0, 0);
+    var pngUrl = cutCv.toDataURL('image/png');
+    cutCv.width = maskCv.width = 0; cutCv.height = maskCv.height = 0;
+
+    decodeImage(pngUrl, function (err, im) {
+      if (err || !im) return;
+      pushUndo('Lift & Edit ' + (label || 'Object'));
+      var healed = autoHealBg ? autoHealPolygonGround(pts, true) : 0;
+      var binId = uid('cut'); bins.assets[binId] = pngUrl; imgs.assets[binId] = im;
+      var cnt = doc.assets.filter(function (a) { return a.source === 'cutout'; }).length + 1;
+      var ast = normalizeAsset({
+        id: uid('ast'), binId: binId,
+        name: (label ? (label + ' [Lifted]') : ('Lifted #' + cnt)),
+        source: 'cutout', naturalW: bw, naturalH: bh,
+        x: +(x0 + bw / 2).toFixed(2), y: +(y0 + bh / 2).toFixed(2),
+        wPx: bw, hPx: bh, elevationM: 2.6, shadowEnabled: true
+      });
+      doc.assets.push(ast);
+      doc.layers.assets.visible = true;
+      clearAllSelections(); selAssetId = ast.id; cutPts = [];
+      persistToIDB(); setTool('select'); syncUI(); draw();
+      if (wsCtrl) wsCtrl.toggleRight(true);
+      var insp = ov && ov.querySelector('#scAssetInsp');
+      if (insp) insp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      var ar = langOf('panels') === 'ar';
+      setStatus(
+        ar
+          ? ('تم استخراج «' + ast.name + '» ' + (healed ? 'وتنظيف الخلفية تحته تلقائياً — ' : '— ') + 'يمكنك الآن التدوير والتحجيم وعكس الظل والدمج بالكامل.')
+          : ('Lifted "' + ast.name + '"' + (healed ? ' & auto-healed ground underneath — ' : ' — ') + 'ready for full rotation, resize, shadow & blending.'),
+        false
+      );
+    });
+  }
+
+  function extractCutoutFromBase() {
+    if (!imgs.base || cutPts.length < 3) { setStatus('Draw 3+ points around object first.', true); return; }
+    var cnt = doc.assets.filter(function (a) { return a.source === 'cutout'; }).length + 1;
+    liftPolygonFromBase(cutPts.slice(), 'Cutout #' + cnt, autoHealOnLift, cutFeatherPx);
   }
 
   function stampPaintBrushDab(imgPt) {
@@ -899,38 +1093,6 @@ window.SOS = window.SOS || {};
     cctx.save(); cctx.globalAlpha = clamp(photoCfg.opacity, 0.05, 1);
     cctx.drawImage(cvBrush, imgPt.x * cleanupCacheScale - dr, imgPt.y * cleanupCacheScale - dr, dr * 2, dr * 2);
     cctx.restore(); cvBrush.width = 0; cvBrush.height = 0;
-  }
-
-  function extractCutoutFromBase() {
-    if (!imgs.base || cutPts.length < 3) { setStatus('Draw 3+ points around object first.', true); return; }
-    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
-    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    cutPts.forEach(function (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
-    var fPx = clamp(+cutFeatherPx || 0, 0, 6), pad = Math.ceil(fPx * 2) + 2;
-    var x0 = Math.max(0, Math.floor(minX - pad)), y0 = Math.max(0, Math.floor(minY - pad));
-    var x1 = Math.min(iw, Math.ceil(maxX + pad)), y1 = Math.min(ih, Math.ceil(maxY + pad));
-    var bw = x1 - x0, bh = y1 - y0;
-    if (bw < 4 || bh < 4 || bw > MAX_SAFE_EDGE || bh > MAX_SAFE_EDGE) { setStatus('Invalid cutout size.', true); return; }
-    var cutCv = document.createElement('canvas'); cutCv.width = bw; cutCv.height = bh;
-    var cctx = cutCv.getContext('2d'); cctx.drawImage(imgs.base, x0, y0, bw, bh, 0, 0, bw, bh);
-    var maskCv = document.createElement('canvas'); maskCv.width = bw; maskCv.height = bh;
-    var mctx = maskCv.getContext('2d'); mctx.beginPath();
-    cutPts.forEach(function (p, i) { if (i === 0) mctx.moveTo(p.x - x0, p.y - y0); else mctx.lineTo(p.x - x0, p.y - y0); });
-    mctx.closePath();
-    if (fPx > 0 && 'filter' in mctx) mctx.filter = 'blur(' + fPx + 'px)';
-    mctx.fillStyle = '#fff'; mctx.fill(); mctx.filter = 'none';
-    cctx.globalCompositeOperation = 'destination-in'; cctx.drawImage(maskCv, 0, 0);
-    var pngUrl = cutCv.toDataURL('image/png');
-    cutCv.width = 0; cutCv.height = 0; maskCv.width = 0; maskCv.height = 0;
-    decodeImage(pngUrl, function (err, im) {
-      if (err || !im) return;
-      pushUndo('Extract 1:1 Cutout');
-      var binId = uid('cut'); bins.assets[binId] = pngUrl; imgs.assets[binId] = im;
-      var cnt = doc.assets.filter(function (a) { return a.source === 'cutout'; }).length + 1;
-      var ast = normalizeAsset({ id: uid('ast'), binId: binId, name: 'Cutout #' + cnt + ' (A➔B)', source: 'cutout', naturalW: bw, naturalH: bh, x: +(x0 + bw / 2).toFixed(2), y: +(y0 + bh / 2).toFixed(2), wPx: bw, hPx: bh });
-      doc.assets.push(ast); doc.layers.assets.visible = true; clearAllSelections(); selAssetId = ast.id; cutPts = [];
-      persistToIDB(); setTool('select'); syncUI(); draw();
-    });
   }
 
   function addProceduralAssetToScene(name, kind, dataUrl, cx, cy, wPx, hPx, rotDeg, elevM, castSh) {
@@ -1493,22 +1655,24 @@ window.SOS = window.SOS || {};
     ctx.fillStyle = isDay ? '#0369a1' : '#00e5ff'; ctx.fillText(txt, 30, 21.5);
     ctx.restore();
   }
-
-  // === END PART 1 / 2 ===
-  // =========================================================================
-  // 9. INDEPENDENT LANGUAGE SYNC & FLOATING QUICK MENU (EDIT/MOVE/VERTS/CLONE/DEL)
+// =========================================================================
+  // 9. INDEPENDENT LANGUAGE SYNC & FLOATING QUICK MENU (LIFT/EDIT/MOVE/SHADOW)
   // =========================================================================
   var quickVertsArmed = false;
 
   function applyLanguagePrefsUI() {
-    if (!ov || !S.SatThemeUI) return;
-    var lp = S.SatThemeUI.normalizeLangPrefs(doc.langPrefs);
+    if (!ov) return;
+    var lp = safeNormLang(doc.langPrefs);
     doc.langPrefs = lp;
     doc.lang = lp.panels;
-    if (menuCtrl) menuCtrl.setLang(lp.menus, lp);
-    if (railCtrl) railCtrl.render(tool, lp.guide);
-    S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, lp.guide);
-    S.SatThemeUI.applyPanelLang(ov, lp.panels);
+    if (menuCtrl && typeof menuCtrl.setLang === 'function') menuCtrl.setLang(lp.menus, lp);
+    if (railCtrl && typeof railCtrl.render === 'function') railCtrl.render(tool, lp.guide);
+    if (S.SatThemeUI && typeof S.SatThemeUI.updateToolGuide === 'function') {
+      S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tool, lp.guide);
+    }
+    if (S.SatThemeUI && typeof S.SatThemeUI.applyPanelLang === 'function') {
+      S.SatThemeUI.applyPanelLang(ov, lp.panels);
+    }
   }
 
   function ensureQuickPopCss() {
@@ -1516,22 +1680,43 @@ window.SOS = window.SOS || {};
     var st = document.createElement('style');
     st.id = 'aj-sat-qpop-css';
     st.textContent =
-      '.satc-qpop{position:absolute;z-index:32;display:none;flex-direction:column;gap:4px;min-width:190px;max-width:calc(100% - 16px);' +
+      '.satc-qpop{position:absolute;z-index:32;display:none;flex-direction:column;gap:4px;min-width:205px;max-width:calc(100% - 14px);' +
         'background:rgba(8,14,24,.95);border:1.5px solid var(--sc-cyan,#00e5ff);border-radius:8px;padding:6px 7px;' +
         'box-shadow:0 8px 26px rgba(0,0,0,.68);backdrop-filter:blur(4px);user-select:none}' +
       'body.ui-day .satc-qpop{background:rgba(255,255,255,.97);border-color:#0369a1;box-shadow:0 8px 22px rgba(15,23,42,.22)}' +
       '.satc-qpop.show{display:flex}' +
       '.satc-qpop-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10.5px;font-weight:700;color:var(--sc-green2,#00ff66);border-bottom:1px solid var(--sc-border,#15222e);padding-bottom:3px}' +
       'body.ui-day .satc-qpop-hd{color:#15803d}' +
-      '.satc-qpop-hd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:195px}' +
+      '.satc-qpop-hd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}' +
       '.satc-qpop-row{display:flex;flex-wrap:wrap;gap:4px}' +
       '.satc-qpop-btn{flex:1 1 auto;min-height:28px;padding:4px 7px;border-radius:5px;border:1px solid var(--sc-border-hi,#1f3b52)!important;' +
         'background:var(--sc-input,#06090e)!important;color:var(--sc-txt,#d9ecff)!important;font-family:' + MONO + ';font-size:10.5px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:none!important}' +
       'body.ui-day .satc-qpop-btn{background:#f8fafc!important;color:#0f172a!important;border-color:#94a3b8!important}' +
       '.satc-qpop-btn.on{border-color:var(--sc-green2,#00ff66)!important;color:var(--sc-green2,#00ff66)!important;background:rgba(0,255,102,.14)!important}' +
-      '.satc-qpop-btn.amb{border-color:var(--sc-amber,#e8c84a)!important;color:var(--sc-amber,#e8c84a)!important;background:rgba(232,200,74,.14)!important}' +
+      '.satc-qpop-btn.cy{border-color:var(--sc-cyan,#00e5ff)!important;color:var(--sc-cyan,#00e5ff)!important;background:rgba(0,229,255,.14)!important}' +
+      '.satc-qpop-btn.amb{border-color:var(--sc-amber,#e8c84a)!important;color:var(--sc-amber,#e8c84a)!important;background:rgba(232,200,74,.16)!important}' +
       '.satc-qpop-btn.dng{border-color:var(--sc-red,#ff3c3c)!important;color:var(--sc-red,#ff3c3c)!important;background:rgba(255,60,60,.14)!important}';
     document.head.appendChild(st);
+  }
+
+  function nudgeSunAzimuth(deltaDeg, reason) {
+    pushUndo(reason || 'Adjust Shadow Direction');
+    var cur = isFinite(doc.sun.azimuthDeg) ? doc.sun.azimuthDeg : 135;
+    doc.sun.azimuthDeg = Math.round(((cur + deltaDeg) % 360 + 360) % 360);
+    persistToIDB(); syncUI(); draw();
+    setStatus(
+      langOf('panels') === 'ar'
+        ? ('اتجاه الظل الآن: ' + doc.sun.azimuthDeg + '°')
+        : ('Shadow azimuth: ' + doc.sun.azimuthDeg + '°'),
+      false
+    );
+  }
+
+  function nudgeAssetRotation(asset, deltaDeg) {
+    if (!asset) return;
+    pushUndo('Rotate Asset');
+    asset.rotationDeg = +((((asset.rotationDeg || 0) + deltaDeg) % 360 + 360) % 360).toFixed(1);
+    persistToIDB(); syncUI(); draw();
   }
 
   function getActiveSelectionTarget() {
@@ -1667,9 +1852,21 @@ window.SOS = window.SOS || {};
     }
     var ar = langOf('menus') === 'ar';
     var kindTag = t.kind === 'geoterra' ? 'GeoTerra' : t.kind === 'gis' ? 'ArcGIS' : t.kind === 'asset' ? 'Asset' : 'Pin';
-    var vertsBtnHtml = t.isPoly
-      ? ('<button type="button" class="satc-qpop-btn' + (quickVertsArmed ? ' amb' : '') + '" data-qa="verts">⬡ ' + (ar ? (quickVertsArmed ? 'إنهاء الزوايا' : 'زوايا') : (quickVertsArmed ? 'Done Pts' : 'Vertices')) + '</button>')
-      : (t.kind === 'asset' ? ('<button type="button" class="satc-qpop-btn" data-qa="crop">✂ ' + (ar ? 'قص' : 'Crop') + '</button>') : '');
+    var canLift = (t.kind === 'gis' || t.kind === 'geoterra') && t.item.points && t.item.points.length >= 3;
+
+    var extraBtns = '';
+    if (canLift) {
+      extraBtns += '<button type="button" class="satc-qpop-btn amb" data-qa="lift">✨ ' + (ar ? 'تعديل من الأساس' : 'Lift & Edit') + '</button>';
+    }
+    if (t.isPoly) {
+      extraBtns += '<button type="button" class="satc-qpop-btn' + (quickVertsArmed ? ' amb' : '') + '" data-qa="verts">⬡ ' + (ar ? (quickVertsArmed ? 'إنهاء الزوايا' : 'زوايا') : (quickVertsArmed ? 'Done Pts' : 'Vertices')) + '</button>';
+    } else if (t.kind === 'asset') {
+      extraBtns +=
+        '<button type="button" class="satc-qpop-btn cy" data-qa="rot15">↻ +15°</button>' +
+        '<button type="button" class="satc-qpop-btn amb" data-qa="flipsh">⇄ ' + (ar ? 'عكس الظل' : 'Flip Sh') + '</button>' +
+        '<button type="button" class="satc-qpop-btn on" data-qa="tone">🎨 ' + (ar ? 'دمج' : 'Blend') + '</button>' +
+        '<button type="button" class="satc-qpop-btn" data-qa="crop">✂ ' + (ar ? 'قص' : 'Crop') + '</button>';
+    }
 
     quickPopEl.dir = ar ? 'rtl' : 'ltr';
     quickPopEl.innerHTML =
@@ -1680,15 +1877,15 @@ window.SOS = window.SOS || {};
       '<div class="satc-qpop-row">' +
         '<button type="button" class="satc-qpop-btn" data-qa="edit">✎ ' + (ar ? 'تعديل' : 'Edit') + '</button>' +
         '<button type="button" class="satc-qpop-btn' + (quickMoveArmed ? ' on' : '') + '" data-qa="move">✥ ' + (ar ? (quickMoveArmed ? 'تثبيت' : 'تحريك') : (quickMoveArmed ? 'Done' : 'Move')) + '</button>' +
-        vertsBtnHtml +
+        extraBtns +
         '<button type="button" class="satc-qpop-btn" data-qa="clone">⧉ ' + (ar ? 'نسخ' : 'Clone') + '</button>' +
         '<button type="button" class="satc-qpop-btn dng" data-qa="del">🗑 ' + (ar ? 'حذف' : 'Delete') + '</button>' +
       '</div>';
 
     quickPopEl.classList.add('show');
     var sp = i2s(t.anchorImg.x, t.anchorImg.y);
-    var pw = quickPopEl.offsetWidth || 220;
-    var ph = quickPopEl.offsetHeight || 68;
+    var pw = quickPopEl.offsetWidth || 235;
+    var ph = quickPopEl.offsetHeight || 74;
     var left = clamp(sp[0] - pw / 2, 10, Math.max(10, W - pw - 10));
     var top = sp[1] - ph - 22;
     if (top < 38) top = Math.min(H - ph - 12, sp[1] + 24);
@@ -1701,7 +1898,10 @@ window.SOS = window.SOS || {};
         var act = btn.dataset.qa;
         if (act === 'close') { clearAllSelections(); quickVertsArmed = false; syncUI(); draw(); }
         else if (act === 'edit') editSelectedTarget(t);
-        else if (act === 'move') {
+        else if (act === 'lift') {
+          quickMoveArmed = false; quickVertsArmed = false;
+          liftPolygonFromBase(t.item.points, t.label, autoHealOnLift, cutFeatherPx);
+        } else if (act === 'move') {
           quickMoveArmed = !quickMoveArmed;
           if (quickMoveArmed) {
             quickVertsArmed = false;
@@ -1718,7 +1918,10 @@ window.SOS = window.SOS || {};
             setStatus(ar ? 'اسحب أي نقطة صفراء لتعديل زوايا «' + t.label + '».' : 'Drag any yellow corner handle to reshape "' + t.label + '".', false);
           }
           draw();
-        } else if (act === 'crop') { setTool('crop_asset'); }
+        } else if (act === 'rot15') { nudgeAssetRotation(t.item, 15); }
+        else if (act === 'flipsh') { nudgeSunAzimuth(180, 'Flip Shadow 180°'); }
+        else if (act === 'tone') { autoMatchSoilTone(); }
+        else if (act === 'crop') { setTool('crop_asset'); }
         else if (act === 'clone') cloneSelectedTarget(t);
         else if (act === 'del') deleteSelectedTarget(t);
       };
@@ -2367,7 +2570,7 @@ window.SOS = window.SOS || {};
   function onKeyUp(e) { if (e.key === ' ') space = false; }
 
   // =========================================================================
-  // 12. UNIFIED UI BUILD, MENU ROUTER & SYNC
+  // 12. UNIFIED UI BUILD, MENU ROUTER & FULL ASSET INSPECTOR
   // =========================================================================
   function setTool(t) {
     tool = t;
@@ -2378,8 +2581,10 @@ window.SOS = window.SOS || {};
     if (t !== 'gt_survey') gtDraftPts = [];
     if (t !== 'clone') cloneCfg.pickMode = false;
     if (t !== 'bearing_cal') bearingDraft = { p1: null, p2: null };
-    if (railCtrl) railCtrl.setActive(t);
-    if (ov && S.SatThemeUI) S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), t, langOf('guide'));
+    if (railCtrl && typeof railCtrl.setActive === 'function') railCtrl.setActive(t);
+    if (ov && S.SatThemeUI && typeof S.SatThemeUI.updateToolGuide === 'function') {
+      S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), t, langOf('guide'));
+    }
     if (cv) cv.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
     syncUI(); draw();
   }
@@ -2399,15 +2604,22 @@ window.SOS = window.SOS || {};
   }
 
   function openLanguageSettings() {
-    if (!S.SatThemeUI || !S.SatThemeUI.openLangSettingsModal) return;
-    S.SatThemeUI.openLangSettingsModal(doc.langPrefs, function (newPrefs) {
-      doc.langPrefs = S.SatThemeUI.normalizeLangPrefs(newPrefs);
-      doc.lang = doc.langPrefs.panels;
+    if (S.SatThemeUI && typeof S.SatThemeUI.openLangSettingsModal === 'function') {
+      S.SatThemeUI.openLangSettingsModal(doc.langPrefs, function (newPrefs) {
+        doc.langPrefs = safeNormLang(newPrefs);
+        doc.lang = doc.langPrefs.panels;
+        applyLanguagePrefsUI();
+        persistToIDB();
+        syncUI();
+        draw();
+      });
+    } else {
+      var nxt = langOf('menus') === 'en' ? 'ar' : 'en';
+      doc.langPrefs = { menus: nxt, guide: nxt, panels: nxt };
+      doc.lang = nxt;
       applyLanguagePrefsUI();
-      persistToIDB();
-      syncUI();
-      draw();
-    });
+      persistToIDB(); syncUI(); draw();
+    }
   }
 
   function handleMenuAction(act) {
@@ -2537,7 +2749,7 @@ window.SOS = window.SOS || {};
     var box = ov.querySelector('#scAssetInsp'), a = getSelAsset();
     var ar = langOf('panels') === 'ar';
     if (!a) {
-      box.innerHTML = '<div class="mut">' + (ar ? 'اختر عنصراً من الخريطة أو القائمة لتعديله.' : 'Select an asset on canvas or list to edit.') + '</div>';
+      box.innerHTML = '<div class="mut">' + (ar ? 'اختر عنصراً (أو اضغط ✨ تعديل من الأساس على أي مضلع) لتعديل دورانه وحجمه وظله ودمجه.' : 'Select an asset (or tap ✨ Lift & Edit on any polygon) to rotate, resize, flip shadow, soften & blend.') + '</div>';
       return;
     }
     var ppm = doc.calibration.pxPerMeter || 0;
@@ -2549,17 +2761,27 @@ window.SOS = window.SOS || {};
       '<label>' + (ar ? 'اسم العنصر' : 'Asset Name') + '<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
       (ppm > 0 ? '<div class="satc-grid2"><label>W (m)<input type="number" id="saWm" step="0.1" value="' + (a.wPx / ppm).toFixed(2) + '"></label><label>H (m)<input type="number" id="saHm" step="0.1" value="' + (a.hPx / ppm).toFixed(2) + '"></label></div>' : '') +
       '<div class="satc-grid2"><label>W (px)<input type="number" id="saWpx" step="1" value="' + Math.round(a.wPx) + '"></label><label>H (px)<input type="number" id="saHpx" step="1" value="' + Math.round(a.hPx) + '"></label></div>' +
-      '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>' + (ar ? 'قفل التناسب' : 'Lock Aspect') + '</label>' +
-      '<div class="satc-grid2"><label>' + (ar ? 'تدوير' : 'Rot') + ' (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>°)<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '"></label><label>' + (ar ? 'شفافية' : 'Op') + ' (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label></div>' +
+      '<label class="ck"><input type="checkbox" id="saLockAsp"' + (a.lockAspect ? ' checked' : '') + '>' + (ar ? 'قفل التناسب (الحجم)' : 'Lock Aspect Ratio') + '</label>' +
+      '<div class="satc-grid2"><label>' + (ar ? 'الدوران' : 'Rot') + ' (<span id="saRotV">' + Math.round(a.rotationDeg || 0) + '</span>°)<input type="range" id="saRot" min="0" max="359" step="0.5" value="' + (a.rotationDeg || 0) + '"></label><label>' + (ar ? 'الشفافية' : 'Op') + ' (<span id="saOpV">' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '</span>%)<input type="range" id="saOp" min="10" max="100" value="' + Math.round((a.opacity != null ? a.opacity : 1) * 100) + '"></label></div>' +
+      '<div class="row"><button id="saRm90">-90°</button><button id="saRm15">-15°</button><button id="saRp15">+15°</button><button id="saRp90">+90°</button></div>' +
       '<div class="row"><button id="saFlipH">' + (ar ? 'قلب أفقي' : 'Flip H') + '</button><button id="saFlipV">' + (ar ? 'قلب عمودي' : 'Flip V') + '</button><button id="saLock">' + (a.locked ? (ar ? 'فتح القفل' : 'Unlock') : (ar ? 'قفل' : 'Lock')) + '</button></div>' +
-      '<div class="row"><button id="saUp">' + (ar ? 'أعلى' : 'Up') + '</button><button id="saDn">' + (ar ? 'أسفل' : 'Down') + '</button><button id="saDup" class="cy">' + (ar ? 'نسخ' : 'Clone') + '</button><button id="saAutoTone" class="on">' + (ar ? 'تطابق لون' : 'Auto Tone') + '</button></div>' +
+      '<div class="row"><button id="saUp">' + (ar ? 'أعلى' : 'Up') + '</button><button id="saDn">' + (ar ? 'أسفل' : 'Down') + '</button><button id="saDup" class="cy">' + (ar ? 'نسخ' : 'Clone') + '</button></div>' +
+
+      '<div class="satc-sec-h"><span>' + (ar ? 'انعكاس الظل والارتفاع' : 'Shadow Reflection & Height') + ' (' + Math.round(doc.sun.azimuthDeg || 0) + '°)</span></div>' +
+      '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>' + (ar ? 'تفعيل الظل' : 'Shadow ON') + '</label><label>' + (ar ? 'الارتفاع (م)' : 'Elev (m)') + '<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
+      '<div class="row"><button id="saFlipSh" class="amb">⇄ ' + (ar ? 'عكس الظل 180°' : 'Flip Shadow 180°') + '</button><button id="saShM45">-45°</button><button id="saShP45">+45°</button></div>' +
+
+      '<div class="satc-sec-h"><span>' + (ar ? 'التنعيم والدمج في الخلفية' : 'Edge Soften & Ground Blend') + '</span></div>' +
+      '<div class="satc-grid2"><button id="saAutoTone" class="on">🎨 ' + (ar ? 'دمج لوني تلقائي' : 'Auto Blend Tone') + '</button><button id="saHealBg" class="cy">🧹 ' + (ar ? 'تنظيف الخلفية تحته' : 'Heal Ground') + '</button></div>' +
+      '<label>' + (ar ? 'تنعيم الحواف' : 'Edge Feather') + ' (<span id="saSoftV">' + edgeSoftenPx + '</span>px)<input type="range" id="saSoftPx" min="1" max="12" step="1" value="' + edgeSoftenPx + '"></label>' +
+      '<button id="saSoftenBtn" class="cy">✨ ' + (ar ? 'تطبيق تنعيم الحواف الآن' : 'Soften Asset Edges') + '</button>' +
       '<select id="saPreset"><option value="">' + (ar ? '-- نمط دمج السطح --' : '-- Surface Blend Preset --') + '</option>' + prHtml + '</select>' +
-      '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>' + (ar ? 'الظل' : 'Shadow') + '</label><label>' + (ar ? 'الارتفاع (م)' : 'Elev (m)') + '<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
       '<label>' + (ar ? 'السطوع' : 'Bright') + ' (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" value="' + fl.brightness + '"></label>' +
       '<label>' + (ar ? 'التباين' : 'Contrast') + ' (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" value="' + fl.contrast + '"></label>' +
       '<label>' + (ar ? 'التشبع' : 'Sat') + ' (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" value="' + fl.saturation + '"></label>' +
-      '<label>' + (ar ? 'الدفء' : 'Warmth') + ' (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
-      '<label>' + (ar ? 'النعومة' : 'Blur') + ' (<span id="saBlV">' + (fl.blurPx || 0) + '</span>px)<input type="range" id="saBl" min="0" max="2" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
+      '<label>' + (ar ? 'الدفء اللوني' : 'Warmth') + ' (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
+      '<label>' + (ar ? 'تنعيم العدسة (Blur)' : 'Blur') + ' (<span id="saBlV">' + (fl.blurPx || 0) + '</span>px)<input type="range" id="saBl" min="0" max="2.5" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
+      '<label>' + (ar ? 'تحبب فضائي (Grain)' : 'Sat Grain') + ' (<span id="saGrV">' + (fl.grain || 0) + '</span>)<input type="range" id="saGr" min="0" max="30" step="1" value="' + (fl.grain || 0) + '"></label>' +
       '<button id="saDel" class="dng">' + (ar ? 'حذف العنصر' : 'Delete Asset') + '</button>';
 
     box.querySelector('#saName').onchange = function () { pushUndo('Rename Asset'); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
@@ -2578,6 +2800,10 @@ window.SOS = window.SOS || {};
     box.querySelector('#saHpx').onchange = function () { setD(a.wPx, parseFloat(this.value) || 8, 'h'); };
     box.querySelector('#saRot').oninput = function () { a.rotationDeg = +this.value; box.querySelector('#saRotV').textContent = Math.round(a.rotationDeg); draw(); };
     box.querySelector('#saRot').onchange = function () { persistToIDB(); };
+    box.querySelector('#saRm90').onclick = function () { nudgeAssetRotation(a, -90); };
+    box.querySelector('#saRm15').onclick = function () { nudgeAssetRotation(a, -15); };
+    box.querySelector('#saRp15').onclick = function () { nudgeAssetRotation(a, 15); };
+    box.querySelector('#saRp90').onclick = function () { nudgeAssetRotation(a, 90); };
     box.querySelector('#saOp').oninput = function () { a.opacity = (+this.value) / 100; box.querySelector('#saOpV').textContent = this.value; draw(); };
     box.querySelector('#saOp').onchange = function () { persistToIDB(); };
     box.querySelector('#saFlipH').onclick = function () { pushUndo('Flip H'); a.flipX = !a.flipX; persistToIDB(); draw(); };
@@ -2586,8 +2812,16 @@ window.SOS = window.SOS || {};
     box.querySelector('#saUp').onclick = function () { reorderSelectedAsset(1); };
     box.querySelector('#saDn').onclick = function () { reorderSelectedAsset(-1); };
     box.querySelector('#saDup').onclick = duplicateSelectedAsset;
+
+    box.querySelector('#saFlipSh').onclick = function () { nudgeSunAzimuth(180, 'Flip Shadow 180°'); };
+    box.querySelector('#saShM45').onclick = function () { nudgeSunAzimuth(-45, 'Rotate Shadow -45°'); };
+    box.querySelector('#saShP45').onclick = function () { nudgeSunAzimuth(45, 'Rotate Shadow +45°'); };
     box.querySelector('#saAutoTone').onclick = autoMatchSoilTone;
+    box.querySelector('#saHealBg').onclick = healUnderSelectedAsset;
+    box.querySelector('#saSoftPx').oninput = function () { edgeSoftenPx = +this.value; box.querySelector('#saSoftV').textContent = this.value; };
+    box.querySelector('#saSoftenBtn').onclick = function () { softenAssetEdges(a, edgeSoftenPx); };
     box.querySelector('#saDel').onclick = deleteSelectedAsset;
+
     box.querySelector('#saPreset').onchange = function () {
       var pr = S.SatBlending && S.SatBlending.PRESETS[this.value]; this.value = ''; if (!pr) return;
       pushUndo('Apply Blend Preset');
@@ -2603,7 +2837,8 @@ window.SOS = window.SOS || {};
       el.onchange = function () { persistToIDB(); };
     }
     bF('#saBr', '#saBrV', 'brightness', false); bF('#saCt', '#saCtV', 'contrast', false);
-    bF('#saSa', '#saSaV', 'saturation', false); bF('#saWm', '#saWmV', 'warmth', false); bF('#saBl', '#saBlV', 'blurPx', true);
+    bF('#saSa', '#saSaV', 'saturation', false); bF('#saWm', '#saWmV', 'warmth', false);
+    bF('#saBl', '#saBlV', 'blurPx', true); bF('#saGr', '#saGrV', 'grain', false);
   }
 
   function renderBottomDrawerContent() {
@@ -2682,6 +2917,10 @@ window.SOS = window.SOS || {};
     var activePts = (tool === 'cutout' || tool === 'crop_asset' || tool === 'lasso_erase') ? cutPts : ((tool === 'poly_draw' || tool === 'gis_line' || tool === 'gis_split') ? gisDraftPts : (tool === 'gt_survey' ? gtDraftPts : []));
     bldBox.style.display = (tool === 'cutout' || tool === 'crop_asset' || tool === 'lasso_erase' || tool === 'poly_draw' || tool === 'gis_line' || tool === 'gis_split' || tool === 'gt_survey') ? 'flex' : 'none';
     ov.querySelector('#scBuildPtsV').textContent = String(activePts.length);
+    var healRow = ov.querySelector('#scAutoHealRow');
+    if (healRow) healRow.style.display = tool === 'cutout' ? 'flex' : 'none';
+    var healChk = ov.querySelector('#scAutoHealChk');
+    if (healChk) healChk.checked = !!autoHealOnLift;
 
     if (ov.querySelector('#scGisCat')) ov.querySelector('#scGisCat').value = doc.gis.activeCategory || 'building';
     if (ov.querySelector('#scSnapOn')) ov.querySelector('#scSnapOn').checked = !!(doc.gis.snap && doc.gis.snap.enabled);
@@ -2698,6 +2937,16 @@ window.SOS = window.SOS || {};
     });
 
     renderAssetInspector();
+
+    // Sync Global Sun Sliders with doc.sun (e.g. after Flip Shadow 180°)
+    var sunAzEl = ov.querySelector('#scSunAz');
+    if (sunAzEl && document.activeElement !== sunAzEl) { sunAzEl.value = Math.round(doc.sun.azimuthDeg || 0); ov.querySelector('#scSunAzV').textContent = String(Math.round(doc.sun.azimuthDeg || 0)); }
+    var sunLenEl = ov.querySelector('#scSunLen');
+    if (sunLenEl && document.activeElement !== sunLenEl) { sunLenEl.value = doc.sun.lengthFactor != null ? doc.sun.lengthFactor : 0.75; ov.querySelector('#scSunLenV').textContent = String(sunLenEl.value); }
+    var sunOpEl = ov.querySelector('#scSunOp');
+    if (sunOpEl && document.activeElement !== sunOpEl) { var opPct = Math.round((doc.sun.opacity != null ? doc.sun.opacity : 0.38) * 100); sunOpEl.value = opPct; ov.querySelector('#scSunOpV').textContent = String(opPct); }
+    var sunBlEl = ov.querySelector('#scSunBl');
+    if (sunBlEl && document.activeElement !== sunBlEl) { sunBlEl.value = doc.sun.blurPx != null ? doc.sun.blurPx : 4; ov.querySelector('#scSunBlV').textContent = String(sunBlEl.value); }
 
     var p1 = calibDraft.p1 || doc.calibration.p1, p2 = calibDraft.p2 || doc.calibration.p2;
     ov.querySelector('#scCalStat').textContent = doc.calibration.pxPerMeter > 0 ? (doc.calibration.pxPerMeter.toFixed(3) + ' px/m') : (ar ? 'غير معاير' : 'Uncalibrated');
@@ -2764,7 +3013,7 @@ window.SOS = window.SOS || {};
   }
 
   function build() {
-    if (S.SatThemeUI) S.SatThemeUI.ensureCss();
+    if (S.SatThemeUI && typeof S.SatThemeUI.ensureCss === 'function') S.SatThemeUI.ensureCss();
     ensureQuickPopCss();
     ov = document.createElement('div');
     ov.className = 'satc-pro hide';
@@ -2785,7 +3034,8 @@ window.SOS = window.SOS || {};
             '<div class="satc-guide" id="scToolGuide"></div>' +
             '<div id="scBuildBox" class="satc-card" style="display:none;border-color:var(--sc-cyan)">' +
               '<b><span data-i18n="active_poly">Active Polygon / Line</span> (<span id="scBuildPtsV">0</span> pts)</b>' +
-              '<label><span data-i18n="edge_feather">Edge Feather</span> (<span id="scCutFeaV">2</span>px)<input type="range" id="scCutFea" min="0" max="10" step="0.5" value="2"></label>' +
+              '<label><span data-i18n="edge_feather">Edge Feather</span> (<span id="scCutFeaV">3</span>px)<input type="range" id="scCutFea" min="0" max="10" step="0.5" value="3"></label>' +
+              '<label id="scAutoHealRow" class="ck" style="display:none"><input type="checkbox" id="scAutoHealChk" checked><span>Auto-Heal Ground Underneath</span></label>' +
               '<div class="satc-grid2"><button id="scBuildExec" class="on" data-i18n="btn_apply">Apply / Finish</button><button id="scBuildUndo" data-i18n="btn_undo_pt">Undo Pt</button></div>' +
               '<button id="scBuildCan" class="dng" data-i18n="btn_cancel">Cancel</button>' +
             '</div>' +
@@ -2911,7 +3161,11 @@ window.SOS = window.SOS || {};
       railCtrl = S.SatThemeUI.buildLeftIconRail(ov.querySelector('#scIconRail'), {
         lang: langOf('guide'),
         onSelectTool: setTool,
-        onHoverTool: function (tid) { S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, langOf('guide')); }
+        onHoverTool: function (tid) {
+          if (typeof S.SatThemeUI.updateToolGuide === 'function') {
+            S.SatThemeUI.updateToolGuide(ov.querySelector('#scToolGuide'), tid || tool, langOf('guide'));
+          }
+        }
       });
       wsCtrl = S.SatThemeUI.createWorkspaceController(ov, { onResize: resize, onSwipeChange: draw });
       applyLanguagePrefsUI();
@@ -2925,6 +3179,7 @@ window.SOS = window.SOS || {};
     ov.querySelector('#scImpGtDirect').onclick = function () { handleMenuAction('import_gt_json'); };
 
     ov.querySelector('#scCutFea').oninput = function () { cutFeatherPx = +this.value; ov.querySelector('#scCutFeaV').textContent = this.value; };
+    ov.querySelector('#scAutoHealChk').onchange = function () { autoHealOnLift = !!this.checked; };
     ov.querySelector('#scBuildUndo').onclick = function () { if (cutPts.length) cutPts.pop(); else if (gisDraftPts.length) gisDraftPts.pop(); else if (gtDraftPts.length) gtDraftPts.pop(); syncUI(); draw(); };
     ov.querySelector('#scBuildCan').onclick = function () { cutPts = []; gisDraftPts = []; gtDraftPts = []; setTool('select'); };
     ov.querySelector('#scBuildExec').onclick = function () {
@@ -3090,3 +3345,4 @@ window.SOS = window.SOS || {};
     importGeoTerraData: applyParsedGeoTerraData
   };
 })(window.SOS);
+  // === END PART 1 / 2 ===
