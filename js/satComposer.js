@@ -239,7 +239,8 @@ window.SOS = window.SOS || {};
       id: uid('ast'), binId: '', name: 'Asset', source: 'png',
       naturalW: 100, naturalH: 100, x: 100, y: 100, wPx: 100, hPx: 100,
       lockAspect: true, rotationDeg: 0, flipX: false, flipY: false,
-      opacity: 1, visible: true, locked: false, elevationM: 2.5, shadowEnabled: true
+      opacity: 1, visible: true, locked: false, elevationM: 2.5,
+      shadowEnabled: true, shadowAzimuthDeg: null
     }, a || {}, {
       filters: Object.assign(
         { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 },
@@ -317,19 +318,52 @@ window.SOS = window.SOS || {};
     calibDraft = { p1: doc.calibration.p1, p2: doc.calibration.p2 };
     recomputeGeoref(false);
     cleanupDirty = true;
-    persistToIDB(); syncUI(); draw();
+
+    var needDecode = false;
+    if (entry && typeof entry === 'object' && 'prevCleanupBin' in entry) {
+      bins.cleanup = entry.prevCleanupBin || null;
+      if (!bins.cleanup) imgs.cleanup = null;
+      needDecode = true;
+    }
+    if (entry && typeof entry === 'object' && entry.restoredAssetBin && entry.restoredAssetBin.id && entry.restoredAssetBin.data) {
+      bins.assets[entry.restoredAssetBin.id] = entry.restoredAssetBin.data;
+      needDecode = true;
+    }
+
+    if (needDecode) {
+      var snapGen = opGen;
+      decodeAllImages(snapGen, function () {
+        if (snapGen !== opGen) return;
+        cleanupDirty = true;
+        persistToIDB(); syncUI(); draw();
+      });
+    } else {
+      persistToIDB(); syncUI(); draw();
+    }
   }
 
   function doUndo() {
     if (!undoStack.length) return;
-    redoStack.push({ label: 'Redo Point', ts: '', json: JSON.stringify(doc) });
-    restoreUndoEntry(undoStack.pop());
+    var entry = undoStack.pop();
+    var redoObj = { label: 'Redo Point', ts: '', json: JSON.stringify(doc) };
+    if (entry && typeof entry === 'object' && 'prevCleanupBin' in entry) {
+      redoObj.prevCleanupBin = bins.cleanup;
+      redoObj.assetBinRef = entry.restoredAssetBin || null;
+    }
+    redoStack.push(redoObj);
+    restoreUndoEntry(entry);
   }
 
   function doRedo() {
     if (!redoStack.length) return;
-    undoStack.push({ label: 'Undo Point', ts: '', json: JSON.stringify(doc) });
-    restoreUndoEntry(redoStack.pop());
+    var entry = redoStack.pop();
+    var undoObj = { label: 'Undo Point', ts: '', json: JSON.stringify(doc) };
+    if (entry && typeof entry === 'object' && 'prevCleanupBin' in entry) {
+      undoObj.prevCleanupBin = bins.cleanup;
+      undoObj.restoredAssetBin = entry.assetBinRef || null;
+    }
+    undoStack.push(undoObj);
+    restoreUndoEntry(entry);
   }
 
   function jumpToHistoryIndex(idx) {
@@ -774,8 +808,35 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 5. PHOTOSHOP TOOLS, LIFT & AUTO-HEAL GROUND, EDGE SOFTEN & ASSETS
+  // 5. PER-ASSET SHADOW WRAPPER, LIFT & HEAL, FLATTEN & PHOTO TOOLS
   // =========================================================================
+  function patchSatBlendingPerAssetShadow() {
+    if (!S.SatBlending || typeof S.SatBlending.renderLayer03 !== 'function' || S.SatBlending._perAssetShadowPatched) return;
+    var origRender = S.SatBlending.renderLayer03;
+    S.SatBlending.renderLayer03 = function (targetCtx, opts) {
+      if (!opts || !Array.isArray(opts.assets) || !opts.assets.length) {
+        return origRender.call(this, targetCtx, opts);
+      }
+      var hasCustom = opts.assets.some(function (a) {
+        return a && a.shadowAzimuthDeg != null && isFinite(a.shadowAzimuthDeg);
+      });
+      if (!hasCustom) {
+        return origRender.call(this, targetCtx, opts);
+      }
+      for (var i = 0; i < opts.assets.length; i++) {
+        var a = opts.assets[i];
+        var effSun = (a && a.shadowAzimuthDeg != null && isFinite(a.shadowAzimuthDeg))
+          ? Object.assign({}, opts.sun || {}, { azimuthDeg: a.shadowAzimuthDeg })
+          : opts.sun;
+        origRender.call(this, targetCtx, Object.assign({}, opts, {
+          assets: [a],
+          sun: effSun
+        }));
+      }
+    };
+    S.SatBlending._perAssetShadowPatched = true;
+  }
+
   function replaceAssetImageDataUrl(asset, newDataUrl, newDims, statusText) {
     decodeImage(newDataUrl, function (err, im) {
       if (err || !im || !im.naturalWidth) { setStatus('Failed to update image.', true); return; }
@@ -1047,7 +1108,7 @@ window.SOS = window.SOS || {};
         name: (label ? (label + ' [Lifted]') : ('Lifted #' + cnt)),
         source: 'cutout', naturalW: bw, naturalH: bh,
         x: +(x0 + bw / 2).toFixed(2), y: +(y0 + bh / 2).toFixed(2),
-        wPx: bw, hPx: bh, elevationM: 2.6, shadowEnabled: true
+        wPx: bw, hPx: bh, elevationM: 2.6, shadowEnabled: true, shadowAzimuthDeg: null
       });
       doc.assets.push(ast);
       doc.layers.assets.visible = true;
@@ -1059,8 +1120,105 @@ window.SOS = window.SOS || {};
       var ar = langOf('panels') === 'ar';
       setStatus(
         ar
-          ? ('تم استخراج «' + ast.name + '» ' + (healed ? 'وتنظيف الخلفية تحته تلقائياً — ' : '— ') + 'يمكنك الآن التدوير والتحجيم وعكس الظل والدمج بالكامل.')
-          : ('Lifted "' + ast.name + '"' + (healed ? ' & auto-healed ground underneath — ' : ' — ') + 'ready for full rotation, resize, shadow & blending.'),
+          ? ('تم استخراج «' + ast.name + '» ' + (healed ? 'وتنظيف الخلفية تحته تلقائياً — ' : '— ') + 'جاهز للتدوير والتحجيم والظل المخصص والدمج.')
+          : ('Lifted "' + ast.name + '"' + (healed ? ' & auto-healed ground underneath — ' : ' — ') + 'ready for full rotation, resize, per-asset shadow & blending.'),
+        false
+      );
+    });
+  }
+
+  function flattenSelectedAssetToCleanup() {
+    var a = getSelAsset();
+    var ar = langOf('panels') === 'ar';
+    if (!a || !imgs.base || !imgs.assets[a.binId]) {
+      setStatus(ar ? 'اختر عنصراً مع وجود خريطة الأساس أولاً.' : 'Select an asset with Base Satellite loaded first.', true);
+      return;
+    }
+    var msg = ar
+      ? ('تثبيت ودمج «' + a.name + '» نهائياً داخل طبقة الأرضية (02_Ground_Cleanup) مع ظله وألوانه وتحرير ذاكرته؟\n(يمكن التراجع بـ Undo أو المسح بالممحاة الناعمة)')
+      : ('Flatten "' + a.name + '" (with shadow & blending) into 02_Ground_Cleanup and free asset memory?\n(Reversible via Undo or Soft Eraser)');
+    if (!confirm(msg)) return;
+
+    patchSatBlendingPerAssetShadow();
+    var iw = imgs.base.naturalWidth, ih = imgs.base.naturalHeight;
+    var sc = Math.min(1, MAX_LIVE_CACHE_EDGE / Math.max(iw, ih));
+    var cw = Math.max(1, Math.round(iw * sc)), ch = Math.max(1, Math.round(ih * sc));
+
+    var fcv = document.createElement('canvas');
+    fcv.width = cw; fcv.height = ch;
+    var fctx = fcv.getContext('2d');
+    fctx.clearRect(0, 0, cw, ch);
+
+    renderCleanupLayerTo(fctx, cw, ch, sc);
+
+    if (S.SatBlending && typeof S.SatBlending.renderLayer03 === 'function') {
+      S.SatBlending.renderLayer03(fctx, {
+        assets: [a],
+        imgs: imgs.assets,
+        sun: doc.sun,
+        pxPerMeter: doc.calibration.pxPerMeter,
+        layerOpacity: clamp(doc.layers.assets.opacity, 0, 1),
+        scale: sc, ox: 0, oy: 0, viewW: cw, viewH: ch, forExport: false
+      });
+    } else {
+      var im = imgs.assets[a.binId];
+      fctx.save();
+      fctx.translate(a.x * sc, a.y * sc);
+      fctx.rotate((a.rotationDeg || 0) * D);
+      fctx.scale(a.flipX ? -1 : 1, a.flipY ? -1 : 1);
+      fctx.globalAlpha = clamp(a.opacity != null ? a.opacity : 1, 0, 1);
+      fctx.drawImage(im, (-a.wPx * sc) / 2, (-a.hPx * sc) / 2, a.wPx * sc, a.hPx * sc);
+      fctx.restore();
+    }
+
+    var newCleanupUrl = fcv.toDataURL('image/png');
+    fcv.width = 0; fcv.height = 0;
+
+    var prevCleanupBin = bins.cleanup;
+    var removedBinId = a.binId;
+    var removedBinData = bins.assets[removedBinId] || null;
+    var assetName = a.name;
+
+    decodeImage(newCleanupUrl, function (err, newIm) {
+      if (err || !newIm) {
+        setStatus(ar ? 'فشل تسطيح العنصر داخل الأرضية.' : 'Failed to flatten asset.', true);
+        return;
+      }
+      undoStack.push({
+        label: 'Flatten ' + assetName,
+        ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        json: JSON.stringify(doc),
+        prevCleanupBin: prevCleanupBin,
+        restoredAssetBin: removedBinId ? { id: removedBinId, data: removedBinData } : null
+      });
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = [];
+      syncUndoBtns();
+
+      bins.cleanup = newCleanupUrl;
+      imgs.cleanup = newIm;
+      doc.cleanupImage = { id: uid('cln'), name: 'Flattened_' + assetName, width: cw, height: ch };
+      doc.patches = [];
+      doc.cleanupErases = [];
+      doc.layers.cleanup.visible = true;
+
+      doc.assets = doc.assets.filter(function (x) { return x.id !== a.id; });
+      var stillUsed = doc.assets.some(function (x) { return x.binId === removedBinId; });
+      if (!stillUsed && removedBinId) {
+        delete bins.assets[removedBinId];
+        delete imgs.assets[removedBinId];
+      }
+      selAssetId = null;
+      quickMoveArmed = false;
+      cleanupDirty = true;
+
+      persistToIDB();
+      syncUI();
+      draw();
+      setStatus(
+        ar
+          ? ('تم تثبيت «' + assetName + '» داخل الأرضية (02_Ground_Cleanup) وتحرير الذاكرة.')
+          : ('Flattened "' + assetName + '" into 02_Ground_Cleanup & freed asset memory.'),
         false
       );
     });
@@ -1361,6 +1519,7 @@ window.SOS = window.SOS || {};
   // 8. MAIN 6-LAYER RENDERER + SWIPE + SELECTION HIGHLIGHT
   // =========================================================================
   function drawEditedLayers(iw, ih, tl, dw, dh) {
+    patchSatBlendingPerAssetShadow();
     if (doc.layers.cleanup.visible && imgs.base) {
       var ccv = ensureCleanupCache();
       if (ccv) {
@@ -1656,7 +1815,7 @@ window.SOS = window.SOS || {};
     ctx.restore();
   }
 // =========================================================================
-  // 9. INDEPENDENT LANGUAGE SYNC & FLOATING QUICK MENU (LIFT/EDIT/MOVE/SHADOW)
+  // 9. INDEPENDENT LANGUAGE SYNC, PER-ASSET SHADOW & FLOATING QUICK MENU
   // =========================================================================
   var quickVertsArmed = false;
 
@@ -1680,7 +1839,7 @@ window.SOS = window.SOS || {};
     var st = document.createElement('style');
     st.id = 'aj-sat-qpop-css';
     st.textContent =
-      '.satc-qpop{position:absolute;z-index:32;display:none;flex-direction:column;gap:4px;min-width:205px;max-width:calc(100% - 14px);' +
+      '.satc-qpop{position:absolute;z-index:32;display:none;flex-direction:column;gap:4px;min-width:215px;max-width:calc(100% - 14px);' +
         'background:rgba(8,14,24,.95);border:1.5px solid var(--sc-cyan,#00e5ff);border-radius:8px;padding:6px 7px;' +
         'box-shadow:0 8px 26px rgba(0,0,0,.68);backdrop-filter:blur(4px);user-select:none}' +
       'body.ui-day .satc-qpop{background:rgba(255,255,255,.97);border-color:#0369a1;box-shadow:0 8px 22px rgba(15,23,42,.22)}' +
@@ -1699,15 +1858,37 @@ window.SOS = window.SOS || {};
     document.head.appendChild(st);
   }
 
-  function nudgeSunAzimuth(deltaDeg, reason) {
-    pushUndo(reason || 'Adjust Shadow Direction');
-    var cur = isFinite(doc.sun.azimuthDeg) ? doc.sun.azimuthDeg : 135;
-    doc.sun.azimuthDeg = Math.round(((cur + deltaDeg) % 360 + 360) % 360);
+  function getEffShadowAz(asset) {
+    if (asset && asset.shadowAzimuthDeg != null && isFinite(asset.shadowAzimuthDeg)) {
+      return Math.round(((asset.shadowAzimuthDeg % 360) + 360) % 360);
+    }
+    return isFinite(doc.sun.azimuthDeg) ? Math.round(((doc.sun.azimuthDeg % 360) + 360) % 360) : 135;
+  }
+
+  function nudgeAssetShadowAz(asset, deltaDeg, reason) {
+    if (!asset) return;
+    pushUndo(reason || 'Adjust Asset Shadow');
+    var cur = getEffShadowAz(asset);
+    asset.shadowAzimuthDeg = Math.round(((cur + deltaDeg) % 360 + 360) % 360);
+    asset.shadowEnabled = true;
     persistToIDB(); syncUI(); draw();
     setStatus(
       langOf('panels') === 'ar'
-        ? ('اتجاه الظل الآن: ' + doc.sun.azimuthDeg + '°')
-        : ('Shadow azimuth: ' + doc.sun.azimuthDeg + '°'),
+        ? ('ظل «' + asset.name + '» (مخصص): ' + asset.shadowAzimuthDeg + '°')
+        : ('"' + asset.name + '" custom shadow: ' + asset.shadowAzimuthDeg + '°'),
+      false
+    );
+  }
+
+  function resetAssetShadowToGlobal(asset) {
+    if (!asset) return;
+    pushUndo('Reset Shadow to Global Sun');
+    asset.shadowAzimuthDeg = null;
+    persistToIDB(); syncUI(); draw();
+    setStatus(
+      langOf('panels') === 'ar'
+        ? ('تم ربط ظل «' + asset.name + '» باتجاه الشمس الموحّد (' + Math.round(doc.sun.azimuthDeg || 135) + '°).')
+        : ('Linked "' + asset.name + '" shadow back to Global Sun (' + Math.round(doc.sun.azimuthDeg || 135) + '°).'),
       false
     );
   }
@@ -1865,6 +2046,7 @@ window.SOS = window.SOS || {};
         '<button type="button" class="satc-qpop-btn cy" data-qa="rot15">↻ +15°</button>' +
         '<button type="button" class="satc-qpop-btn amb" data-qa="flipsh">⇄ ' + (ar ? 'عكس الظل' : 'Flip Sh') + '</button>' +
         '<button type="button" class="satc-qpop-btn on" data-qa="tone">🎨 ' + (ar ? 'دمج' : 'Blend') + '</button>' +
+        '<button type="button" class="satc-qpop-btn on" data-qa="flatten">📌 ' + (ar ? 'تثبيت بالأرض' : 'Flatten') + '</button>' +
         '<button type="button" class="satc-qpop-btn" data-qa="crop">✂ ' + (ar ? 'قص' : 'Crop') + '</button>';
     }
 
@@ -1884,8 +2066,8 @@ window.SOS = window.SOS || {};
 
     quickPopEl.classList.add('show');
     var sp = i2s(t.anchorImg.x, t.anchorImg.y);
-    var pw = quickPopEl.offsetWidth || 235;
-    var ph = quickPopEl.offsetHeight || 74;
+    var pw = quickPopEl.offsetWidth || 240;
+    var ph = quickPopEl.offsetHeight || 78;
     var left = clamp(sp[0] - pw / 2, 10, Math.max(10, W - pw - 10));
     var top = sp[1] - ph - 22;
     if (top < 38) top = Math.min(H - ph - 12, sp[1] + 24);
@@ -1919,8 +2101,9 @@ window.SOS = window.SOS || {};
           }
           draw();
         } else if (act === 'rot15') { nudgeAssetRotation(t.item, 15); }
-        else if (act === 'flipsh') { nudgeSunAzimuth(180, 'Flip Shadow 180°'); }
+        else if (act === 'flipsh') { nudgeAssetShadowAz(t.item, 180, 'Flip Asset Shadow 180°'); }
         else if (act === 'tone') { autoMatchSoilTone(); }
+        else if (act === 'flatten') { flattenSelectedAssetToCleanup(); }
         else if (act === 'crop') { setTool('crop_asset'); }
         else if (act === 'clone') cloneSelectedTarget(t);
         else if (act === 'del') deleteSelectedTarget(t);
@@ -2712,6 +2895,7 @@ window.SOS = window.SOS || {};
   }
 
   function buildExportPayload() {
+    patchSatBlendingPerAssetShadow();
     return { doc: doc, baseImg: imgs.base, assetImgs: imgs.assets, siteName: (St && St.project && St.project.meta && St.project.meta.name) || 'Site', renderCleanupTo: renderCleanupLayerTo };
   }
   function buildGeoTerraOpts() {
@@ -2749,14 +2933,20 @@ window.SOS = window.SOS || {};
     var box = ov.querySelector('#scAssetInsp'), a = getSelAsset();
     var ar = langOf('panels') === 'ar';
     if (!a) {
-      box.innerHTML = '<div class="mut">' + (ar ? 'اختر عنصراً (أو اضغط ✨ تعديل من الأساس على أي مضلع) لتعديل دورانه وحجمه وظله ودمجه.' : 'Select an asset (or tap ✨ Lift & Edit on any polygon) to rotate, resize, flip shadow, soften & blend.') + '</div>';
+      box.innerHTML = '<div class="mut">' + (ar ? 'اختر عنصراً (أو اضغط ✨ تعديل من الأساس على أي مضلع) لتعديل دورانه وحجمه وظله المخصص ودمجه.' : 'Select an asset (or tap ✨ Lift & Edit on any polygon) to rotate, resize, set custom shadow, soften & flatten.') + '</div>';
       return;
     }
     var ppm = doc.calibration.pxPerMeter || 0;
     var fl = a.filters || { brightness: 100, contrast: 100, saturation: 100, warmth: 0, blurPx: 0, grain: 0 };
+    var hasCustomSh = a.shadowAzimuthDeg != null && isFinite(a.shadowAzimuthDeg);
+    var effShAz = getEffShadowAz(a);
+    var shBadge = hasCustomSh
+      ? ('<span class="satc-tag lk">' + (ar ? 'مخصص' : 'CUSTOM') + ' ' + effShAz + '°</span>')
+      : ('<span class="satc-tag ok">' + (ar ? 'الشمس' : 'SUN') + ' ' + effShAz + '°</span>');
     var prHtml = (S.SatBlending && S.SatBlending.PRESETS)
       ? Object.keys(S.SatBlending.PRESETS).map(function (k) { return '<option value="' + k + '">' + esc(S.SatBlending.PRESETS[k].label) + '</option>'; }).join('')
       : '';
+
     box.innerHTML =
       '<label>' + (ar ? 'اسم العنصر' : 'Asset Name') + '<input type="text" id="saName" value="' + esc(a.name) + '"></label>' +
       (ppm > 0 ? '<div class="satc-grid2"><label>W (m)<input type="number" id="saWm" step="0.1" value="' + (a.wPx / ppm).toFixed(2) + '"></label><label>H (m)<input type="number" id="saHm" step="0.1" value="' + (a.hPx / ppm).toFixed(2) + '"></label></div>' : '') +
@@ -2767,11 +2957,12 @@ window.SOS = window.SOS || {};
       '<div class="row"><button id="saFlipH">' + (ar ? 'قلب أفقي' : 'Flip H') + '</button><button id="saFlipV">' + (ar ? 'قلب عمودي' : 'Flip V') + '</button><button id="saLock">' + (a.locked ? (ar ? 'فتح القفل' : 'Unlock') : (ar ? 'قفل' : 'Lock')) + '</button></div>' +
       '<div class="row"><button id="saUp">' + (ar ? 'أعلى' : 'Up') + '</button><button id="saDn">' + (ar ? 'أسفل' : 'Down') + '</button><button id="saDup" class="cy">' + (ar ? 'نسخ' : 'Clone') + '</button></div>' +
 
-      '<div class="satc-sec-h"><span>' + (ar ? 'انعكاس الظل والارتفاع' : 'Shadow Reflection & Height') + ' (' + Math.round(doc.sun.azimuthDeg || 0) + '°)</span></div>' +
+      '<div class="satc-sec-h"><span>' + (ar ? 'ظل مخصص لهذا العنصر' : 'Per-Asset Shadow') + '</span>' + shBadge + '</div>' +
       '<div class="satc-grid2"><label class="ck"><input type="checkbox" id="saShOn"' + (a.shadowEnabled !== false ? ' checked' : '') + '>' + (ar ? 'تفعيل الظل' : 'Shadow ON') + '</label><label>' + (ar ? 'الارتفاع (م)' : 'Elev (m)') + '<input type="number" id="saElev" step="0.2" value="' + (a.elevationM != null ? a.elevationM : 2.5) + '"></label></div>' +
-      '<div class="row"><button id="saFlipSh" class="amb">⇄ ' + (ar ? 'عكس الظل 180°' : 'Flip Shadow 180°') + '</button><button id="saShM45">-45°</button><button id="saShP45">+45°</button></div>' +
+      '<label>' + (ar ? 'اتجاه ظل هذا العنصر' : 'Asset Shadow Azimuth') + ' (<span id="saShAzV">' + effShAz + '</span>°)<input type="range" id="saShAz" min="0" max="359" step="1" value="' + effShAz + '"></label>' +
+      '<div class="row"><button id="saFlipSh" class="amb">⇄ ' + (ar ? 'عكس 180°' : 'Flip 180°') + '</button><button id="saShM45">-45°</button><button id="saShP45">+45°</button><button id="saShReset" class="cy"' + (hasCustomSh ? '' : ' disabled') + '>☀ ' + (ar ? 'ربط بالشمس' : 'Sync Sun') + '</button></div>' +
 
-      '<div class="satc-sec-h"><span>' + (ar ? 'التنعيم والدمج في الخلفية' : 'Edge Soften & Ground Blend') + '</span></div>' +
+      '<div class="satc-sec-h"><span>' + (ar ? 'التنعيم والدمج والتثبيت' : 'Edge Soften, Blend & Flatten') + '</span></div>' +
       '<div class="satc-grid2"><button id="saAutoTone" class="on">🎨 ' + (ar ? 'دمج لوني تلقائي' : 'Auto Blend Tone') + '</button><button id="saHealBg" class="cy">🧹 ' + (ar ? 'تنظيف الخلفية تحته' : 'Heal Ground') + '</button></div>' +
       '<label>' + (ar ? 'تنعيم الحواف' : 'Edge Feather') + ' (<span id="saSoftV">' + edgeSoftenPx + '</span>px)<input type="range" id="saSoftPx" min="1" max="12" step="1" value="' + edgeSoftenPx + '"></label>' +
       '<button id="saSoftenBtn" class="cy">✨ ' + (ar ? 'تطبيق تنعيم الحواف الآن' : 'Soften Asset Edges') + '</button>' +
@@ -2779,9 +2970,10 @@ window.SOS = window.SOS || {};
       '<label>' + (ar ? 'السطوع' : 'Bright') + ' (<span id="saBrV">' + fl.brightness + '</span>%)<input type="range" id="saBr" min="50" max="150" value="' + fl.brightness + '"></label>' +
       '<label>' + (ar ? 'التباين' : 'Contrast') + ' (<span id="saCtV">' + fl.contrast + '</span>%)<input type="range" id="saCt" min="50" max="150" value="' + fl.contrast + '"></label>' +
       '<label>' + (ar ? 'التشبع' : 'Sat') + ' (<span id="saSaV">' + fl.saturation + '</span>%)<input type="range" id="saSa" min="0" max="200" value="' + fl.saturation + '"></label>' +
-      '<label>' + (ar ? 'الدفء اللوني' : 'Warmth') + ' (<span id="saWmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
+      '<label>' + (ar ? 'الدفء اللوني' : 'Warmth') + ' (<span id="saWarmV">' + (fl.warmth || 0) + '</span>)<input type="range" id="saWarm" min="-50" max="50" value="' + (fl.warmth || 0) + '"></label>' +
       '<label>' + (ar ? 'تنعيم العدسة (Blur)' : 'Blur') + ' (<span id="saBlV">' + (fl.blurPx || 0) + '</span>px)<input type="range" id="saBl" min="0" max="2.5" step="0.1" value="' + (fl.blurPx || 0) + '"></label>' +
       '<label>' + (ar ? 'تحبب فضائي (Grain)' : 'Sat Grain') + ' (<span id="saGrV">' + (fl.grain || 0) + '</span>)<input type="range" id="saGr" min="0" max="30" step="1" value="' + (fl.grain || 0) + '"></label>' +
+      '<button id="saFlattenBtn" class="on">📌 ' + (ar ? 'تثبيت ودمج نهائي بالأرضية (Flatten)' : 'Flatten to Ground (Cleanup)') + '</button>' +
       '<button id="saDel" class="dng">' + (ar ? 'حذف العنصر' : 'Delete Asset') + '</button>';
 
     box.querySelector('#saName').onchange = function () { pushUndo('Rename Asset'); a.name = this.value.trim() || 'Asset'; persistToIDB(); syncUI(); draw(); };
@@ -2813,13 +3005,25 @@ window.SOS = window.SOS || {};
     box.querySelector('#saDn').onclick = function () { reorderSelectedAsset(-1); };
     box.querySelector('#saDup').onclick = duplicateSelectedAsset;
 
-    box.querySelector('#saFlipSh').onclick = function () { nudgeSunAzimuth(180, 'Flip Shadow 180°'); };
-    box.querySelector('#saShM45').onclick = function () { nudgeSunAzimuth(-45, 'Rotate Shadow -45°'); };
-    box.querySelector('#saShP45').onclick = function () { nudgeSunAzimuth(45, 'Rotate Shadow +45°'); };
+    var shSlidePushed = false;
+    box.querySelector('#saShAz').oninput = function () {
+      if (!shSlidePushed) { pushUndo('Custom Asset Shadow'); shSlidePushed = true; }
+      a.shadowAzimuthDeg = +this.value;
+      a.shadowEnabled = true;
+      box.querySelector('#saShAzV').textContent = String(Math.round(a.shadowAzimuthDeg));
+      draw();
+    };
+    box.querySelector('#saShAz').onchange = function () { shSlidePushed = false; persistToIDB(); syncUI(); };
+    box.querySelector('#saFlipSh').onclick = function () { nudgeAssetShadowAz(a, 180, 'Flip Asset Shadow 180°'); };
+    box.querySelector('#saShM45').onclick = function () { nudgeAssetShadowAz(a, -45, 'Rotate Asset Shadow -45°'); };
+    box.querySelector('#saShP45').onclick = function () { nudgeAssetShadowAz(a, 45, 'Rotate Asset Shadow +45°'); };
+    box.querySelector('#saShReset').onclick = function () { resetAssetShadowToGlobal(a); };
+
     box.querySelector('#saAutoTone').onclick = autoMatchSoilTone;
     box.querySelector('#saHealBg').onclick = healUnderSelectedAsset;
     box.querySelector('#saSoftPx').oninput = function () { edgeSoftenPx = +this.value; box.querySelector('#saSoftV').textContent = this.value; };
     box.querySelector('#saSoftenBtn').onclick = function () { softenAssetEdges(a, edgeSoftenPx); };
+    box.querySelector('#saFlattenBtn').onclick = flattenSelectedAssetToCleanup;
     box.querySelector('#saDel').onclick = deleteSelectedAsset;
 
     box.querySelector('#saPreset').onchange = function () {
@@ -2833,11 +3037,12 @@ window.SOS = window.SOS || {};
     box.querySelector('#saElev').onchange = function () { a.elevationM = Math.max(0, parseFloat(this.value) || 0); persistToIDB(); draw(); };
     function bF(id, vid, k, flt) {
       var el = box.querySelector(id);
+      if (!el) return;
       el.oninput = function () { a.filters[k] = flt ? parseFloat(this.value) : (+this.value); box.querySelector(vid).textContent = this.value; draw(); };
       el.onchange = function () { persistToIDB(); };
     }
     bF('#saBr', '#saBrV', 'brightness', false); bF('#saCt', '#saCtV', 'contrast', false);
-    bF('#saSa', '#saSaV', 'saturation', false); bF('#saWm', '#saWmV', 'warmth', false);
+    bF('#saSa', '#saSaV', 'saturation', false); bF('#saWarm', '#saWarmV', 'warmth', false);
     bF('#saBl', '#saBlV', 'blurPx', true); bF('#saGr', '#saGrV', 'grain', false);
   }
 
@@ -2938,7 +3143,6 @@ window.SOS = window.SOS || {};
 
     renderAssetInspector();
 
-    // Sync Global Sun Sliders with doc.sun (e.g. after Flip Shadow 180°)
     var sunAzEl = ov.querySelector('#scSunAz');
     if (sunAzEl && document.activeElement !== sunAzEl) { sunAzEl.value = Math.round(doc.sun.azimuthDeg || 0); ov.querySelector('#scSunAzV').textContent = String(Math.round(doc.sun.azimuthDeg || 0)); }
     var sunLenEl = ov.querySelector('#scSunLen');
@@ -3015,6 +3219,7 @@ window.SOS = window.SOS || {};
   function build() {
     if (S.SatThemeUI && typeof S.SatThemeUI.ensureCss === 'function') S.SatThemeUI.ensureCss();
     ensureQuickPopCss();
+    patchSatBlendingPerAssetShadow();
     ov = document.createElement('div');
     ov.className = 'satc-pro hide';
     ov.dataset.ajDone = '1';
@@ -3249,6 +3454,7 @@ window.SOS = window.SOS || {};
   // =========================================================================
   function open() {
     try {
+      patchSatBlendingPerAssetShadow();
       if (!built) build();
       isOpen = true;
       ov.classList.remove('hide');
