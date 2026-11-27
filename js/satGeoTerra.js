@@ -51,7 +51,7 @@ window.SOS = window.SOS || {};
       nextFeatNum: 1,
       gcps: [],
       georefModelType: 'auto',
-      surveyGeom: 'polygon', // 'polygon' | 'point'
+      surveyGeom: 'polygon',
       editSavedVertices: false
     };
   }
@@ -443,7 +443,7 @@ window.SOS = window.SOS || {};
     var zoom = forExport ? 1 : Math.max(0.05, opts.viewS || 1);
     var ox = forExport ? 0 : (opts.ox || 0);
     var oy = forExport ? 0 : (opts.oy || 0);
-    var lang = opts.lang || 'ar';
+    var lang = opts.lang || 'en';
     var model = opts.georefModel || null;
     var ppm = opts.pxPerMeter || (model && model.pxPerMeter) || 0;
     var mpp = ppm > 0 ? (1 / ppm) : null;
@@ -455,7 +455,6 @@ window.SOS = window.SOS || {};
     ctx.translate(ox, oy);
     ctx.scale(zoom, zoom);
 
-    // 1. Dim outside village boundary
     if (closed && state.grid.dimOutside) {
       ctx.save();
       ctx.beginPath();
@@ -468,7 +467,6 @@ window.SOS = window.SOS || {};
       ctx.restore();
     }
 
-    // 2. Clipped aligned sector grid (A1..F4)
     var grid = state.grid.showGrid ? computeGridModel(state) : null;
     if (grid) {
       var gridRef = Math.min(grid.uMax - grid.uMin, grid.vMax - grid.vMin);
@@ -532,7 +530,6 @@ window.SOS = window.SOS || {};
       ctx.restore();
     }
 
-    // 3. Village boundary border
     if (pts.length > 0) {
       var borderW = forExport ? Math.max(2.4, refScale / 360) : (2.4 / zoom);
       ctx.save();
@@ -550,12 +547,11 @@ window.SOS = window.SOS || {};
       ctx.restore();
     }
 
-    // 4. Saved Survey Features (REM / REP / MOD / ADD — Polygons & Pins)
     var feats = state.features || [];
     if (feats.length > 0) {
       var fLineW = forExport ? Math.max(2.2, refScale / 380) : (2.3 / zoom);
       var labelFs = forExport ? Math.max(12, Math.round(refScale / 56)) : Math.max(10, 12 / zoom);
-      var pinR = forExport ? Math.max(6, refScale / 115) : (7.5 / zoom);
+      var pinR = forExport ? Math.max(6, refScale / 115) : (8 / zoom);
 
       var ordered = feats.map(function (feat, origIdx) { return { feat: feat, origIdx: origIdx }; })
         .filter(function (it) { return isFeatureVisible(state, it.feat); })
@@ -596,11 +592,11 @@ window.SOS = window.SOS || {};
           ctx.stroke(); ctx.setLineDash([]);
 
           if (!forExport && state.editSavedVertices) {
-            var hr = 5.5 / zoom;
+            var hr = 6.5 / zoom;
             feat.points.forEach(function (vp) {
               ctx.beginPath(); ctx.arc(vp.x, vp.y, hr, 0, Math.PI * 2);
               ctx.fillStyle = st.stroke; ctx.fill();
-              ctx.lineWidth = 1.5 / zoom; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+              ctx.lineWidth = 1.6 / zoom; ctx.strokeStyle = '#ffffff'; ctx.stroke();
             });
           }
         }
@@ -639,7 +635,6 @@ window.SOS = window.SOS || {};
       ctx.restore();
     }
 
-    // 5. GCP Crosshairs (Live View Only)
     if (!forExport && (state.filters.gcps || opts.activeTool === 'gt_georef') && state.gcps.length > 0) {
       var rG = 8 / zoom;
       var fsG = Math.max(9, 10.5 / zoom);
@@ -670,7 +665,6 @@ window.SOS = window.SOS || {};
       ctx.restore();
     }
 
-    // 6. GPS Breadcrumb Track + Live GPS Blue Dot + Accuracy Ring + Compass Cone (Live View Only)
     if (!forExport && model) {
       var trk = opts.gpsTrack || [];
       if (trk.length >= 2) {
@@ -724,7 +718,6 @@ window.SOS = window.SOS || {};
       }
     }
 
-    // 7. Draft Survey Polygon + Boundary Handles (Live View Only)
     var draft = opts.draftPoints || [];
     if (!forExport && draft.length > 0) {
       ctx.save();
@@ -751,21 +744,21 @@ window.SOS = window.SOS || {};
         }
       }
       draft.forEach(function (dp, idx) {
-        var r = 6.5 / zoom;
-        ctx.beginPath(); ctx.arc(dp.x, dp.y, (idx === 0 && draft.length >= 3) ? r * 1.35 : r, 0, Math.PI * 2);
+        var r = 7.5 / zoom;
+        ctx.beginPath(); ctx.arc(dp.x, dp.y, (idx === 0 && draft.length >= 3) ? r * 1.45 : r, 0, Math.PI * 2);
         ctx.fillStyle = idx === 0 ? '#e8c84a' : '#39ff14'; ctx.fill();
-        ctx.lineWidth = 1.8 / zoom; ctx.strokeStyle = '#080b10'; ctx.stroke();
+        ctx.lineWidth = 2 / zoom; ctx.strokeStyle = '#080b10'; ctx.stroke();
       });
       ctx.restore();
     }
 
     if (!forExport && opts.activeTool === 'gt_boundary' && pts.length > 0) {
-      var rb = 6.5 / zoom;
+      var rb = 7.5 / zoom;
       ctx.save();
       ctx.font = 'bold ' + Math.max(9, 10.5 / zoom) + 'px ' + MONO;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       pts.forEach(function (bp, idx) {
-        ctx.beginPath(); ctx.arc(bp.x, bp.y, (!closed && pts.length >= 3 && idx === 0) ? rb * 1.35 : rb, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(bp.x, bp.y, (!closed && pts.length >= 3 && idx === 0) ? rb * 1.4 : rb, 0, Math.PI * 2);
         ctx.fillStyle = (!closed && pts.length >= 3 && idx === 0) ? '#39ff14' : '#00e5ff'; ctx.fill();
         ctx.lineWidth = 1.8 / zoom; ctx.strokeStyle = '#ffffff'; ctx.stroke();
         ctx.fillStyle = '#080b10'; ctx.fillText(String(idx + 1), bp.x, bp.y + 0.5 / zoom);
@@ -1010,7 +1003,7 @@ window.SOS = window.SOS || {};
 
     return {
       version: 7,
-      language: opts.lang || 'ar',
+      language: opts.lang || 'en',
       imageWidth: baseImg ? baseImg.naturalWidth : 0,
       imageHeight: baseImg ? baseImg.naturalHeight : 0,
       metersPerPixel: mpp ? Number(mpp.toFixed(6)) : null,
@@ -1156,7 +1149,6 @@ window.SOS = window.SOS || {};
     return { state: mergeState(raw), metersPerPixel: (typeof data.metersPerPixel === 'number' && data.metersPerPixel > 0) ? data.metersPerPixel : null };
   }
 
-  // Bridge: Convert GeoTerra Boundary & Survey Features into ArcGIS Vector Features
   function convertToArcGISFeatures(state) {
     if (!S.SatArcGIS || !state) return [];
     var out = [];
@@ -1184,31 +1176,46 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 6. SELF-CONTAINED CYBER HUD / DAYLIGHT FEATURE MODAL & LIGHTBOX
+  // 6. SELF-CONTAINED TOUCH-FRIENDLY FEATURE MODAL & LIGHTBOX (Z-INDEX 2000)
   // =========================================================================
   function ensureModalCss() {
     if (document.getElementById('aj-sat-gt-css')) return;
     var st = document.createElement('style');
     st.id = 'aj-sat-gt-css';
     st.textContent =
-      '.sgt-bg{position:fixed;inset:0;z-index:1100;background:rgba(2,6,15,.82);display:none;align-items:center;justify-content:center;padding:12px;font-family:' + MONO + '}' +
-      '.sgt-bg.open{display:flex}' +
-      '.sgt-box{width:100%;max-width:460px;max-height:92vh;overflow-y:auto;background:var(--sc-panel,#0c121b);color:var(--sc-txt,#d9ecff);border:1px solid var(--sc-cyan,#00e5ff);border-radius:8px;padding:13px;box-shadow:0 12px 34px rgba(0,0,0,.65);display:flex;flex-direction:column;gap:9px;font-size:11.5px}' +
+      '.sgt-bg{position:fixed;inset:0;z-index:2000;background:rgba(2,6,15,.85);display:none;align-items:center;justify-content:center;padding:12px;font-family:' + MONO + '}' +
+      '.sgt-bg.open{display:flex!important}' +
+      '.sgt-box{width:100%;max-width:460px;max-height:90dvh;overflow-y:auto;background:#0c121b;color:#d9ecff;border:1.5px solid #00e5ff;border-radius:10px;padding:14px;box-shadow:0 14px 38px rgba(0,0,0,.78);display:flex;flex-direction:column;gap:10px;font-size:12px}' +
       'body.ui-day .sgt-box{background:#f8fafc;color:#0f172a;border-color:#0369a1}' +
-      '.sgt-box h3{margin:0;font-size:13px;color:var(--sc-cyan,#00e5ff);display:flex;justify-content:space-between;align-items:center}' +
-      '.sgt-types{display:grid;grid-template-columns:1fr 1fr;gap:5px}' +
-      '.sgt-tbtn{padding:7px;border-radius:5px;border:1px solid var(--sc-border,#15222e);background:var(--sc-input,#06090e);color:inherit;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700}' +
-      '.sgt-tbtn.sel-ADD{border-color:#39ff14;color:#39ff14;background:rgba(57,255,20,.14)}' +
-      '.sgt-tbtn.sel-REP{border-color:#c084fc;color:#c084fc;background:rgba(192,132,252,.16)}' +
-      '.sgt-tbtn.sel-REM{border-color:#ff3c3c;color:#ff3c3c;background:rgba(255,60,60,.16)}' +
-      '.sgt-tbtn.sel-MOD{border-color:#e8c84a;color:#e8c84a;background:rgba(232,200,74,.16)}' +
-      '.sgt-box input[type=text],.sgt-box textarea,.sgt-box select{width:100%;padding:6px 8px;border-radius:5px;border:1px solid var(--sc-border-hi,#1f3b52);background:var(--sc-input,#06090e);color:inherit;font-family:inherit;font-size:11.5px}' +
-      'body.ui-day .sgt-box input[type=text],body.ui-day .sgt-box textarea,body.ui-day .sgt-box select{background:#fff;border-color:#cbd5e1}' +
-      '.sgt-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}' +
-      '.sgt-tcard{position:relative;width:102px;background:var(--sc-input,#06090e);border:1px solid var(--sc-border-hi,#1f3b52);border-radius:5px;padding:4px}' +
+      '.sgt-box h3{margin:0;font-size:13.5px;color:#00e5ff;display:flex;justify-content:space-between;align-items:center;gap:8px}' +
+      'body.ui-day .sgt-box h3{color:#0369a1}' +
+      '.sgt-badge{font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid #c084fc;color:#c084fc;font-weight:700}' +
+      '.sgt-types{display:grid;grid-template-columns:1fr 1fr;gap:6px}' +
+      '.sgt-tbtn{min-height:36px;padding:7px;border-radius:6px;border:1.5px solid #1f3b52!important;background:#06090e!important;color:#d9ecff!important;cursor:pointer;font-family:inherit;font-size:11.5px;font-weight:700;box-shadow:none!important}' +
+      'body.ui-day .sgt-tbtn{background:#ffffff!important;color:#0f172a!important;border-color:#94a3b8!important}' +
+      '.sgt-tbtn.sel-ADD{border-color:#39ff14!important;color:#39ff14!important;background:rgba(57,255,20,.16)!important}' +
+      '.sgt-tbtn.sel-REP{border-color:#c084fc!important;color:#c084fc!important;background:rgba(192,132,252,.18)!important}' +
+      '.sgt-tbtn.sel-REM{border-color:#ff3c3c!important;color:#ff3c3c!important;background:rgba(255,60,60,.18)!important}' +
+      '.sgt-tbtn.sel-MOD{border-color:#e8c84a!important;color:#e8c84a!important;background:rgba(232,200,74,.18)!important}' +
+      'body.ui-day .sgt-tbtn.sel-ADD{border-color:#15803d!important;color:#15803d!important;background:#dcfce7!important}' +
+      'body.ui-day .sgt-tbtn.sel-REP{border-color:#7e22ce!important;color:#7e22ce!important;background:#f3e8ff!important}' +
+      'body.ui-day .sgt-tbtn.sel-REM{border-color:#dc2626!important;color:#dc2626!important;background:#fee2e2!important}' +
+      'body.ui-day .sgt-tbtn.sel-MOD{border-color:#b45309!important;color:#b45309!important;background:#fef3c7!important}' +
+      '.sgt-box input[type=text],.sgt-box textarea,.sgt-box select{width:100%;padding:7px 9px;border-radius:6px;border:1px solid #1f3b52;background:#06090e;color:#d9ecff;font-family:inherit;font-size:12px;box-sizing:border-box}' +
+      'body.ui-day .sgt-box input[type=text],body.ui-day .sgt-box textarea,body.ui-day .sgt-box select{background:#fff;color:#0f172a;border-color:#cbd5e1}' +
+      '.sgt-btn{min-height:36px;padding:7px 14px;border-radius:6px;border:1.5px solid #1f3b52!important;background:#101926!important;color:#d9ecff!important;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap;box-shadow:none!important}' +
+      'body.ui-day .sgt-btn{background:#eef3f8!important;color:#0f172a!important;border-color:#94a3b8!important}' +
+      '.sgt-btn.ok{border-color:#00ff66!important;color:#00ff66!important;background:rgba(0,255,102,.15)!important}' +
+      'body.ui-day .sgt-btn.ok{border-color:#15803d!important;color:#15803d!important;background:#dcfce7!important}' +
+      '.sgt-btn.dng{border-color:#ff3c3c!important;color:#ff3c3c!important;background:rgba(255,60,60,.14)!important}' +
+      '.sgt-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}' +
+      '.sgt-tcard{position:relative;width:102px;background:#06090e;border:1px solid #1f3b52;border-radius:6px;padding:4px}' +
       '.sgt-tcard img{width:100%;height:58px;object-fit:cover;border-radius:3px;cursor:pointer;display:block}' +
-      '.sgt-tdel{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ff3c3c;color:#fff;border:1px solid #fff;font-size:11px;cursor:pointer;padding:0;line-height:1}' +
-      '.sgt-lb{position:fixed;inset:0;z-index:1200;background:rgba(2,6,15,.92);display:none;flex-direction:column;align-items:center;justify-content:center;padding:16px;cursor:pointer}' +
+      '.sgt-tdel{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:#ff3c3c;color:#fff;border:1px solid #fff;font-size:12px;cursor:pointer;padding:0;line-height:1}' +
+      '.sgt-flt{display:flex;flex-wrap:wrap;gap:4px}' +
+      '.sgt-flt button{flex:1 1 auto;min-height:28px;padding:3px 6px;border-radius:4px;font-size:10.5px;font-weight:700;cursor:pointer;border:1px solid var(--sc-border,#15222e)!important;background:var(--sc-input,#06090e)!important;color:var(--sc-mut,#7c97b0)!important;box-shadow:none!important}' +
+      '.sgt-flt button.on{border-color:var(--sc-cyan,#00e5ff)!important;color:var(--sc-txt,#d9ecff)!important;background:rgba(0,229,255,.14)!important}' +
+      '.sgt-lb{position:fixed;inset:0;z-index:2100;background:rgba(2,6,15,.94);display:none;flex-direction:column;align-items:center;justify-content:center;padding:16px;cursor:pointer}' +
       '.sgt-lb.open{display:flex}' +
       '.sgt-lb img{max-width:95vw;max-height:82vh;border:2px solid #00e5ff;border-radius:6px;object-fit:contain}' +
       '.sgt-lb div{margin-top:8px;color:#00e5ff;font-family:' + MONO + ';font-size:12px;text-align:center}';
@@ -1222,6 +1229,7 @@ window.SOS = window.SOS || {};
       lb = document.createElement('div');
       lb.id = 'sgt_lightbox';
       lb.className = 'sgt-lb';
+      lb.dataset.ajDone = '1';
       lb.innerHTML = '<img id="sgt_lb_img" alt=""><div id="sgt_lb_cap"></div>';
       lb.onclick = function () { lb.classList.remove('open'); };
       document.body.appendChild(lb);
@@ -1237,7 +1245,7 @@ window.SOS = window.SOS || {};
     var editIdx = typeof opts.editIndex === 'number' ? opts.editIndex : -1;
     var geom = opts.geometry || 'polygon';
     var draftPts = opts.points || [];
-    var lang = opts.lang || 'ar';
+    var lang = opts.lang || 'en';
     var getHeading = opts.getCompassHeading || function () { return null; };
     var onSave = opts.onSave || function () {};
     var onCancel = opts.onCancel || function () {};
@@ -1247,10 +1255,11 @@ window.SOS = window.SOS || {};
       bg = document.createElement('div');
       bg.id = 'sgt_feat_modal';
       bg.className = 'sgt-bg';
+      bg.dataset.ajDone = '1';
       document.body.appendChild(bg);
     }
 
-    var isEdit = editIdx >= 0;
+    var isEdit = editIdx >= 0 && state.features[editIdx];
     var existing = isEdit ? state.features[editIdx] : null;
     var activeId = isEdit ? existing.id : formatId(state.nextFeatNum);
     var curType = isEdit ? existing.type : 'ADD';
@@ -1258,33 +1267,36 @@ window.SOS = window.SOS || {};
     var secs = detectFeatureSectors(state, isEdit ? existing.points : draftPts);
 
     bg.innerHTML =
-      '<div class="sgt-box" dir="' + (lang === 'ar' ? 'rtl' : 'ltr') + '">' +
-        '<h3><span>' + (lang === 'ar' ? (isEdit ? 'تعديل معلم GeoTerra' : 'حفظ معلم ميداني GeoTerra') : (isEdit ? 'Edit GeoTerra Feature' : 'Save GeoTerra Feature')) + '</span><span class="satc-tag gt">' + esc(activeId) + '</span></h3>' +
-        '<div style="font-size:10.5px;color:var(--sc-cyan)">' + (geom === 'point' ? '📌 PIN' : ('📐 POLYGON (' + (isEdit ? existing.points.length : draftPts.length) + ' pts)')) + ' | Sector: ' + (secs.length ? secs.join(', ') : 'N/A') + '</div>' +
+      '<div class="sgt-box" dir="' + (lang === 'ar' ? 'rtl' : 'ltr') + '" data-aj-done="1">' +
+        '<h3><span>' + (lang === 'ar' ? (isEdit ? 'تعديل معلم GeoTerra' : 'إضافة معلم ميداني GeoTerra') : (isEdit ? 'Edit GeoTerra Feature' : 'Add GeoTerra Feature')) + '</span><span class="sgt-badge">' + esc(activeId) + '</span></h3>' +
+        '<div style="font-size:10.5px;color:#00e5ff">' + (geom === 'point' ? '📌 PIN' : ('📐 POLYGON (' + (isEdit ? existing.points.length : draftPts.length) + ' pts)')) + ' | Sector: ' + (secs.length ? secs.join(', ') : 'N/A') + '</div>' +
         '<div class="sgt-types">' +
           '<button type="button" class="sgt-tbtn" data-tp="ADD">🟢 ADD / إضافة</button>' +
           '<button type="button" class="sgt-tbtn" data-tp="REP">🟣 REP / استبدال</button>' +
           '<button type="button" class="sgt-tbtn" data-tp="REM">🔴 REM / إزالة</button>' +
           '<button type="button" class="sgt-tbtn" data-tp="MOD">🟠 MOD / تعديل</button>' +
         '</div>' +
-        '<label>' + (lang === 'ar' ? 'اسم المعلم' : 'Feature Name') + '<input type="text" id="sgt_name" value="' + esc(existing ? existing.name : '') + '"></label>' +
+        '<label>' + (lang === 'ar' ? 'اسم المعلم' : 'Feature Name') + '<input type="text" id="sgt_name" placeholder="' + (lang === 'ar' ? 'مثال: خيمة، ملعب، مبنى...' : 'e.g. Tent, Pitch, Building...') + '" value="' + esc(existing ? existing.name : '') + '"></label>' +
         '<div>' +
           '<div style="display:flex;gap:6px;align-items:center">' +
             '<input type="text" id="sgt_photoref" placeholder="' + (lang === 'ar' ? 'مرجع الصور الميدانية...' : 'Field photo refs...') + '" value="' + esc(existing ? existing.photoRef : '') + '">' +
-            '<label class="satc-qbtn on" style="cursor:pointer">📷 ' + (lang === 'ar' ? 'إرفاق' : 'Photos') + '<input type="file" id="sgt_photo_in" accept="image/*" multiple hidden></label>' +
+            '<label class="sgt-btn ok" style="cursor:pointer;min-height:34px;padding:5px 10px">📷 ' + (lang === 'ar' ? 'صور' : 'Photos') + '<input type="file" id="sgt_photo_in" accept="image/*" multiple hidden></label>' +
           '</div>' +
           '<div id="sgt_thumbs" class="sgt-thumbs"></div>' +
         '</div>' +
         '<div id="sgt_single_wrap"><label>' + (lang === 'ar' ? 'التعليمات والملاحظات الميدانية' : 'Field Notes / Instructions') + '<textarea id="sgt_notes" rows="2">' + esc(existing ? existing.notes : '') + '</textarea></label></div>' +
-        '<div id="sgt_rep_wrap" style="display:none;border:1px dashed #c084fc;padding:7px;border-radius:6px">' +
+        '<div id="sgt_rep_wrap" style="display:none;border:1px dashed #c084fc;padding:8px;border-radius:6px">' +
           '<label style="color:#fca5a5">' + (lang === 'ar' ? 'الخطوة 1 — ما سيُزال (REM)' : 'Step 1 — Remove (REM)') + '<textarea id="sgt_rep_rem" rows="2">' + esc(existing ? existing.removeNotes : '') + '</textarea></label>' +
           '<label style="color:#86efac">' + (lang === 'ar' ? 'الخطوة 2 — ما سيُضاف (ADD)' : 'Step 2 — Add (ADD)') + '<textarea id="sgt_rep_add" rows="2">' + esc(existing ? existing.addNotes : '') + '</textarea></label>' +
         '</div>' +
-        '<div style="display:flex;gap:6px;justify-content:flex-end">' +
-          '<button type="button" class="satc-qbtn on" id="sgt_save">💾 ' + (lang === 'ar' ? 'حفظ' : 'Save') + '</button>' +
-          '<button type="button" class="satc-qbtn dng" id="sgt_cancel">' + (lang === 'ar' ? 'إلغاء' : 'Cancel') + '</button>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">' +
+          '<button type="button" class="sgt-btn ok" id="sgt_save">💾 ' + (lang === 'ar' ? 'حفظ المعلم' : 'Save Feature') + '</button>' +
+          '<button type="button" class="sgt-btn dng" id="sgt_cancel">' + (lang === 'ar' ? 'إلغاء' : 'Cancel') + '</button>' +
         '</div>' +
       '</div>';
+
+    var boxEl = bg.querySelector('.sgt-box');
+    boxEl.onclick = function (ev) { ev.stopPropagation(); };
 
     function syncType(tp) {
       curType = tp;
@@ -1318,7 +1330,7 @@ window.SOS = window.SOS || {};
         sel.onchange = function () { ph.bearing = sel.value; };
 
         var stmp = document.createElement('button');
-        stmp.type = 'button'; stmp.className = 'satc-qbtn'; stmp.textContent = '🧭'; stmp.style.padding = '2px 4px';
+        stmp.type = 'button'; stmp.className = 'sgt-btn'; stmp.textContent = '🧭'; stmp.style.cssText = 'min-height:22px;padding:2px 5px;font-size:10px';
         stmp.onclick = function () {
           var h = getHeading();
           if (typeof h === 'number' && isFinite(h)) {
@@ -1352,7 +1364,7 @@ window.SOS = window.SOS || {};
     bg.querySelector('#sgt_save').onclick = function () {
       var payload = {
         id: activeId,
-        geometry: geom,
+        geometry: isEdit ? existing.geometry : geom,
         type: curType,
         name: bg.querySelector('#sgt_name').value.trim(),
         photoRef: bg.querySelector('#sgt_photoref').value.trim(),
@@ -1363,7 +1375,7 @@ window.SOS = window.SOS || {};
         points: isEdit ? existing.points : draftPts.map(function (p) { return { x: +p.x.toFixed(2), y: +p.y.toFixed(2) }; })
       };
       bg.classList.remove('open');
-      onSave(payload, editIdx);
+      onSave(payload, isEdit ? editIdx : -1);
     };
     bg.querySelector('#sgt_cancel').onclick = function () {
       bg.classList.remove('open');
@@ -1373,13 +1385,14 @@ window.SOS = window.SOS || {};
   }
 
   // =========================================================================
-  // 7. RIGHT-DOCK GEOTERRA WORKSPACE PANEL RENDERER
+  // 7. UNIFIED GEOTERRA WORKSPACE PANEL RENDERER
   // =========================================================================
   function renderGeoTerraPanel(container, opts) {
     if (!container || !opts || !opts.state) return;
+    ensureModalCss();
     var st = opts.state;
     var cb = opts.callbacks || {};
-    var lang = opts.lang || 'ar';
+    var ar = opts.lang === 'ar';
     var model = opts.georefModel || null;
     var gpsStatus = opts.gpsStatus || 'OFF';
 
@@ -1391,38 +1404,45 @@ window.SOS = window.SOS || {};
       var secs = detectFeatureSectors(st, f.points);
       return '<div class="satc-ait" data-gtidx="' + idx + '">' +
         '<b style="color:' + ts.stroke + ';margin-inline-end:4px">' + esc(f.id) + '</b>' +
-        '<span>' + esc(f.name || (lang === 'ar' ? '(بدون اسم)' : '(Unnamed)')) + (secs.length ? (' [' + secs.join(',') + ']') : '') + ((f.photos && f.photos.length) ? (' 📷' + f.photos.length) : '') + '</span>' +
-        '<button type="button" class="satc-qbtn" data-gtfoc="' + idx + '" style="padding:1px 5px">👁</button>' +
-        '<button type="button" class="satc-qbtn" data-gted="' + idx + '" style="padding:1px 5px">✎</button>' +
-        '<button type="button" class="satc-qbtn dng" data-gtdel="' + idx + '" style="padding:1px 5px">×</button>' +
+        '<span>' + esc(f.name || (ar ? '(بدون اسم)' : '(Unnamed)')) + (secs.length ? (' [' + secs.join(',') + ']') : '') + ((f.photos && f.photos.length) ? (' 📷' + f.photos.length) : '') + '</span>' +
+        '<button type="button" class="satc-qbtn" data-gtfoc="' + idx + '" style="padding:2px 6px" title="Focus">👁</button>' +
+        '<button type="button" class="satc-qbtn cy" data-gted="' + idx + '" style="padding:2px 6px" title="Edit">✎</button>' +
+        '<button type="button" class="satc-qbtn dng" data-gtdel="' + idx + '" style="padding:2px 6px" title="Delete">×</button>' +
       '</div>';
-    }).join('') : '<div class="mut">' + (lang === 'ar' ? 'لا توجد معالم GeoTerra بعد.' : 'No GeoTerra survey features yet.') + '</div>';
+    }).join('') : '<div class="mut">' + (ar ? 'لا توجد معالم GeoTerra بعد — اضغط (+ مضلع) أو (+ دبوس) للبدء.' : 'No GeoTerra features yet — tap (+ Polygon) or (+ Pin) to start.') + '</div>';
 
     container.innerHTML =
       '<div class="satc-card" style="border-color:var(--sc-purple,#c084fc)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center">' +
-          '<b style="color:var(--sc-purple,#c084fc)">GEOTERRA FIELD SURVEY v7</b>' +
-          '<span class="satc-tag gt">' + st.features.length + ' items · ' + secCount + ' sec</span>' +
+          '<b style="color:var(--sc-purple,#c084fc)">GEOTERRA SURVEY v7</b>' +
+          '<span class="satc-tag gt">' + st.features.length + (ar ? ' معلم' : ' items') + ' · ' + secCount + (ar ? ' قطاع' : ' sec') + '</span>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<button type="button" class="satc-qbtn" id="sgtP_bound">🗺 Boundary (' + st.boundary.length + ')</button>' +
-          '<button type="button" class="satc-qbtn on" id="sgtP_closeB"' + (st.boundaryClosed || st.boundary.length < 3 ? ' disabled' : '') + '>✅ Close Grid</button>' +
+          '<button type="button" class="satc-qbtn on" id="sgtP_poly">📐 ' + (ar ? '+ مضلع معلم' : '+ Add Polygon') + '</button>' +
+          '<button type="button" class="satc-qbtn on" id="sgtP_pin">📌 ' + (ar ? '+ دبوس معلم' : '+ Add Pin') + '</button>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<button type="button" class="satc-qbtn' + (st.surveyGeom === 'polygon' ? ' on' : '') + '" id="sgtP_poly">📐 Survey Poly</button>' +
-          '<button type="button" class="satc-qbtn' + (st.surveyGeom === 'point' ? ' on' : '') + '" id="sgtP_pin">📌 Survey Pin</button>' +
+          '<button type="button" class="satc-qbtn" id="sgtP_bound">🗺 ' + (ar ? 'حدود القرية' : 'Boundary') + ' (' + st.boundary.length + ')</button>' +
+          '<button type="button" class="satc-qbtn cy" id="sgtP_closeB"' + (st.boundaryClosed || st.boundary.length < 3 ? ' disabled' : '') + '>✅ ' + (ar ? 'إغلاق القطاعات' : 'Close Grid') + '</button>' +
+        '</div>' +
+        '<div class="sgt-flt">' +
+          '<button type="button" data-gtf="ADD" class="' + (st.filters.ADD !== false ? 'on' : '') + '">🟢 ADD</button>' +
+          '<button type="button" data-gtf="MOD" class="' + (st.filters.MOD !== false ? 'on' : '') + '">🟠 MOD</button>' +
+          '<button type="button" data-gtf="REP" class="' + (st.filters.REP !== false ? 'on' : '') + '">🟣 REP</button>' +
+          '<button type="button" data-gtf="REM" class="' + (st.filters.REM !== false ? 'on' : '') + '">🔴 REM</button>' +
+          '<button type="button" data-gtf="pins" class="' + (st.filters.pins !== false ? 'on' : '') + '">📌 Pins</button>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<label>Cols<input type="number" id="sgtP_cols" min="2" max="20" value="' + st.grid.cols + '"></label>' +
-          '<label>Rows<input type="number" id="sgtP_rows" min="2" max="20" value="' + st.grid.rows + '"></label>' +
+          '<label>' + (ar ? 'أعمدة' : 'Cols') + '<input type="number" id="sgtP_cols" min="2" max="20" value="' + st.grid.cols + '"></label>' +
+          '<label>' + (ar ? 'صفوف' : 'Rows') + '<input type="number" id="sgtP_rows" min="2" max="20" value="' + st.grid.rows + '"></label>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<label class="ck"><input type="checkbox" id="sgtP_align"' + (st.grid.aligned ? ' checked' : '') + '>Align Edge</label>' +
-          '<label class="ck"><input type="checkbox" id="sgtP_dim"' + (st.grid.dimOutside ? ' checked' : '') + '>Dim Outside</label>' +
+          '<label class="ck"><input type="checkbox" id="sgtP_align"' + (st.grid.aligned ? ' checked' : '') + '>' + (ar ? 'محاذاة الضلع' : 'Align Edge') + '</label>' +
+          '<label class="ck"><input type="checkbox" id="sgtP_dim"' + (st.grid.dimOutside ? ' checked' : '') + '>' + (ar ? 'تعتيم الخارج' : 'Dim Outside') + '</label>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<label class="ck"><input type="checkbox" id="sgtP_sub"' + (st.grid.subGrid ? ' checked' : '') + '>Sub-Grid</label>' +
-          '<label class="ck"><input type="checkbox" id="sgtP_editV"' + (st.editSavedVertices ? ' checked' : '') + '>Drag Vertices</label>' +
+          '<label class="ck"><input type="checkbox" id="sgtP_sub"' + (st.grid.subGrid ? ' checked' : '') + '>' + (ar ? 'شبكة فرعية' : 'Sub-Grid') + '</label>' +
+          '<label class="ck"><input type="checkbox" id="sgtP_editV"' + (st.editSavedVertices ? ' checked' : '') + '>' + (ar ? 'سحب الزوايا' : 'Drag Vertices') + '</label>' +
         '</div>' +
         '<div style="font-size:10px;color:var(--sc-cyan)">' +
           'GCPs: <b>' + st.gcps.length + '</b>' + (model ? (' (' + model.mode + ', RMS ' + model.rmsPx + 'px)') : ' (Need ≥ 2)') + ' | GPS: <b>' + esc(gpsStatus) + '</b>' +
@@ -1441,15 +1461,30 @@ window.SOS = window.SOS || {};
           '<button type="button" class="satc-qbtn" id="sgtP_ref">🖼 Ref Sheet</button>' +
         '</div>' +
         '<div class="satc-grid2">' +
-          '<button type="button" class="satc-qbtn" id="sgtP_toGis">⇄ Push to ArcGIS</button>' +
+          '<button type="button" class="satc-qbtn" id="sgtP_toGis">⇄ Push ➔ ArcGIS</button>' +
           '<button type="button" class="satc-qbtn" id="sgtP_json">📦 Export JSON</button>' +
         '</div>' +
       '</div>';
 
-    container.querySelector('#sgtP_bound').onclick = function () { if (cb.onTool) cb.onTool('gt_boundary'); };
+    container.querySelector('#sgtP_bound').onclick = function () { st.editSavedVertices = false; if (cb.onTool) cb.onTool('gt_boundary'); };
     container.querySelector('#sgtP_closeB').onclick = function () { if (cb.onCloseBoundary) cb.onCloseBoundary(); };
-    container.querySelector('#sgtP_poly').onclick = function () { st.surveyGeom = 'polygon'; if (cb.onTool) cb.onTool('gt_survey'); };
-    container.querySelector('#sgtP_pin').onclick = function () { st.surveyGeom = 'point'; if (cb.onTool) cb.onTool('gt_survey'); };
+    container.querySelector('#sgtP_poly').onclick = function () {
+      st.surveyGeom = 'polygon';
+      st.editSavedVertices = false;
+      if (cb.onTool) cb.onTool('gt_survey');
+    };
+    container.querySelector('#sgtP_pin').onclick = function () {
+      st.surveyGeom = 'point';
+      st.editSavedVertices = false;
+      if (cb.onTool) cb.onTool('gt_survey');
+    };
+    [].forEach.call(container.querySelectorAll('[data-gtf]'), function (btn) {
+      btn.onclick = function () {
+        var k = btn.dataset.gtf;
+        st.filters[k] = st.filters[k] === false ? true : false;
+        if (cb.onMutate) cb.onMutate();
+      };
+    });
     container.querySelector('#sgtP_cols').onchange = function () { st.grid.cols = clamp(+this.value || 6, 2, 20); if (cb.onMutate) cb.onMutate(); };
     container.querySelector('#sgtP_rows').onchange = function () { st.grid.rows = clamp(+this.value || 4, 2, 20); if (cb.onMutate) cb.onMutate(); };
     container.querySelector('#sgtP_align').onchange = function () { st.grid.aligned = !!this.checked; if (cb.onMutate) cb.onMutate(); };
@@ -1465,6 +1500,12 @@ window.SOS = window.SOS || {};
     container.querySelector('#sgtP_toGis').onclick = function () { if (cb.onPushToArcGIS) cb.onPushToArcGIS(); };
     container.querySelector('#sgtP_json').onclick = function () { if (cb.onExportJson) cb.onExportJson(); };
 
+    [].forEach.call(container.querySelectorAll('[data-gtidx]'), function (row) {
+      row.onclick = function (ev) {
+        if (ev.target.closest('button')) return;
+        if (cb.onFocusFeature) cb.onFocusFeature(+row.dataset.gtidx);
+      };
+    });
     [].forEach.call(container.querySelectorAll('[data-gtfoc]'), function (b) {
       b.onclick = function (ev) { ev.stopPropagation(); if (cb.onFocusFeature) cb.onFocusFeature(+b.dataset.gtfoc); };
     });
